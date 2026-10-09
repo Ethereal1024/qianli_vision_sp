@@ -1,0 +1,153 @@
+#include "ort_backend.hpp"
+
+#include <yaml-cpp/yaml.h>
+
+#include <chrono>
+#include <opencv2/opencv.hpp>
+
+#include "tools/logger.hpp"
+
+namespace auto_aim
+{
+ORTBackend::ORTBackend(const std::string & config_path) : BackendBase(config_path) {}
+
+bool ORTBackend::init(const std::string & model_path, const BackendConfig & model_config)
+{
+  try {
+    model_config_ = model_config;
+
+    env_ = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "ort_backend");
+
+    Ort::SessionOptions session_options;
+    if (device_ == "GPU") {
+#ifdef USE_CUDA
+      OrtCUDAProviderOptions cuda_options;
+      cuda_options.device_id = 0;
+      cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
+      cuda_options.gpu_mem_limit = SIZE_MAX;
+      cuda_options.arena_extend_strategy = 1;
+      session_options.AppendExecutionProvider_CUDA(cuda_options);
+      session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+#else
+      tools::logger()->warn(
+        "GPU device specified but CUDA support not available, falling back to CPU");
+#endif
+    }
+    session_ = Ort::Session(env_, model_path.c_str(), session_options);
+
+    Ort::AllocatorWithDefaultOptions allocator;
+    Ort::AllocatedStringPtr input_name_ptr = session_.GetInputNameAllocated(0, allocator);
+    Ort::AllocatedStringPtr output_name_ptr = session_.GetOutputNameAllocated(0, allocator);
+
+    input_name_ = input_name_ptr.get();
+    output_name_ = output_name_ptr.get();
+
+    return true;
+  } catch (const std::exception & e) {
+    tools::logger()->error("ONNX Runtime初始化失败：{}", e.what());
+    return false;
+  }
+}
+
+bool ORTBackend::infer(const cv::Mat & input, cv::Mat & output, BackendCtx * ctx)
+{
+  if (input.empty()) return false;
+  try {
+    auto ort_ctx = static_cast<ORTCtx *>(ctx);
+
+    cv::Mat processed_input;
+    if (model_config_.preprocess) {
+      preprocess(input, processed_input);
+    } else {
+      processed_input = input;
+    }
+
+    std::vector<int64_t> input_shape = {
+      1, model_config_.input_channels, model_config_.input_size.height,
+      model_config_.input_size.width};
+
+    Ort::MemoryInfo memory_info =
+      (device_ == "GPU") ? Ort::MemoryInfo("Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault)
+                         : Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    ort_ctx->input_tensor_ = Ort::Value::CreateTensor<float>(
+      memory_info, processed_input.ptr<float>(),
+      processed_input.total() * processed_input.channels(), input_shape.data(), input_shape.size());
+
+    const char * input_name_c = input_name_.c_str();
+    const char * output_name_c = output_name_.c_str();
+
+    ort_ctx->output_tensors_ = session_.Run(
+      Ort::RunOptions{nullptr}, &input_name_c, &ort_ctx->input_tensor_, 1, &output_name_c, 1);
+
+    float * output_data = ort_ctx->output_tensors_[0].GetTensorMutableData<float>();
+    auto output_shape = ort_ctx->output_tensors_[0].GetTensorTypeAndShapeInfo().GetShape();
+
+    output = cv::Mat(output_shape[1], output_shape[2], CV_32F, output_data);
+    return true;
+  } catch (const std::exception & e) {
+    tools::logger()->error("ONNX Runtime推理失败：{}", e.what());
+    return false;
+  }
+}
+
+void ORTBackend::infer_async(const cv::Mat & input, BackendCtx * ctx)
+{
+  auto ort_ctx = static_cast<ORTCtx *>(ctx);
+
+  cv::Mat processed_input;
+  if (model_config_.preprocess) {
+    preprocess(input, processed_input);
+  } else {
+    processed_input = input;
+  }
+
+  std::vector<int64_t> input_shape = {
+    1, model_config_.input_channels, model_config_.input_size.height,
+    model_config_.input_size.width};
+
+  Ort::MemoryInfo memory_info =
+    (device_ == "GPU") ? Ort::MemoryInfo("Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault)
+                       : Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+  ort_ctx->input_tensor_ = Ort::Value::CreateTensor<float>(
+    memory_info, processed_input.ptr<float>(), processed_input.total() * processed_input.channels(),
+    input_shape.data(), input_shape.size());
+
+  const char * input_name_c = input_name_.c_str();
+  const char * output_name_c = output_name_.c_str();
+
+  Ort::RunOptions run_options;
+  run_options.SetRunLogVerbosityLevel(1);
+
+  ort_ctx->async_result_ =
+    std::async(std::launch::async, [this, input_name_c, output_name_c, ort_ctx]() {
+      return session_.Run(
+        Ort::RunOptions{nullptr}, &input_name_c, &ort_ctx->input_tensor_, 1, &output_name_c, 1);
+    });
+}
+
+void ORTBackend::wait_for_result(cv::Mat & output, BackendCtx * ctx)
+{
+  auto ort_ctx = static_cast<ORTCtx *>(ctx);
+  ort_ctx->output_tensors_ = ort_ctx->async_result_.get();
+
+  float * output_data = ort_ctx->output_tensors_[0].GetTensorMutableData<float>();
+  auto output_shape = ort_ctx->output_tensors_[0].GetTensorTypeAndShapeInfo().GetShape();
+
+  output = cv::Mat(output_shape[1], output_shape[2], CV_32F, output_data);
+}
+
+void ORTBackend::preprocess(const cv::Mat & src, cv::Mat & dist)
+{
+  dist =
+    cv::dnn::blobFromImage(src, 1 / 255.0, model_config_.input_size, cv::Scalar(), true, false);
+}
+
+std::unique_ptr<BackendCtx> ORTBackend::create_ctx()
+{
+  auto ctx = std::make_unique<ORTCtx>();
+  return ctx;
+}
+
+std::string ORTBackend::get_name() const { return "OnnxRuntime"; }
+
+}  // namespace auto_aim

@@ -3,10 +3,10 @@
 
 #include <list>
 #include <opencv2/opencv.hpp>
-#include <openvino/openvino.hpp>
 #include <string>
 #include <vector>
 
+#include "backend/backend.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/classifier.hpp"
 #include "tasks/auto_aim/detector.hpp"
@@ -38,8 +38,7 @@ private:
   const float score_threshold_ = 0.7;
   double min_confidence_, binary_threshold_;
 
-  ov::Core core_;
-  ov::CompiledModel compiled_model_;
+  Backend backend_;
 
   cv::Rect roi_;
   cv::Point2f offset_;
