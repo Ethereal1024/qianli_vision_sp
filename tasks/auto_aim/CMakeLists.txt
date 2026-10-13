@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake")
-
-find_package(OpenVINO REQUIRED COMPONENTS Runtime)
-
 add_subdirectory(planner/tinympc)
 
 add_library(auto_aim OBJECT 
@@ -25,4 +21,4 @@ add_library(auto_aim OBJECT
     planner/planner.cpp
 )
 
-target_link_libraries(auto_aim io openvino::runtime tinympcstatic)
+target_link_libraries(auto_aim io backend tinympcstatic)
