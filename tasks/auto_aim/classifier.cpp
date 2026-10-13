@@ -13,6 +13,7 @@ Classifier::Classifier(const std::string & config_path) : backend_(config_path)
   BackendConfig config;
   config.input_size = cv::Size(32, 32);
   config.input_channels = 1;
+  config.preprocess = false;
 
   if (!backend_.init(model, config)) {
     throw std::runtime_error("Backend initializing failed");
