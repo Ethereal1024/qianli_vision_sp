@@ -14,7 +14,11 @@ Gimbal::Gimbal(const std::string & config_path)
 
   try {
     serial_.setPort(com_port);
+    serial_.setBaudrate(921600);
+    serial::Timeout time_out = serial::Timeout::simpleTimeout(20);
+    serial_.setTimeout(time_out);
     serial_.open();
+    serial_.flushInput();
   } catch (const std::exception & e) {
     tools::logger()->error("[Gimbal] Failed to open serial: {}", e.what());
     exit(1);
@@ -120,7 +124,13 @@ void Gimbal::send(
 bool Gimbal::read(uint8_t * buffer, size_t size)
 {
   try {
-    return serial_.read(buffer, size) == size;
+    size_t got = 0;
+    while (got < size && !quit_) {
+      auto n = serial_.read(buffer + got, size - got);
+      if (n == 0) return false;
+      got += n;
+    }
+    return got == size;
   } catch (const std::exception & e) {
     // tools::logger()->warn("[Gimbal] Failed to read serial: {}", e.what());
     return false;
@@ -210,6 +220,7 @@ void Gimbal::reconnect()
 
     try {
       serial_.open();  // 尝试重新打开
+      serial_.flushInput();
       queue_.clear();
       tools::logger()->info("[Gimbal] Reconnected serial successfully.");
       break;
