@@ -22,6 +22,8 @@ class Aimer
 {
 public:
   AimPoint debug_aim_point;
+  double debug_dt = 0;
+  double debug_fly_time = 0;
   explicit Aimer(const std::string & config_path);
   io::Command aim(
     std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,

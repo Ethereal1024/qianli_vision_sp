@@ -44,19 +44,16 @@ io::Command Aimer::aim(
 
   // 考虑detecor和tracker所消耗的时间，此外假设aimer的用时可忽略不计
   auto future = timestamp;
+  double dt;
   if (to_now) {
-    double dt;
     dt = tools::delta_time(std::chrono::steady_clock::now(), timestamp) + delay_time;
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
-  }
-
-  else {
-    auto dt = 0.005 + delay_time;  //detector-aimer耗时0.005+发弹延时0.1
+  } else {
+    dt = 0.005 + delay_time;
     // tools::logger()->info("dt is {:.4f} second", dt);
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
   }
+  debug_dt = dt;
+  future += std::chrono::microseconds(int(dt * 1e6));
+  target.predict(future);
 
   auto aim_point0 = choose_aim_point(target);
   debug_aim_point = aim_point0;
@@ -119,6 +116,7 @@ io::Command Aimer::aim(
   Eigen::Vector3d final_xyz = debug_aim_point.xyza.head(3);
   double yaw = std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset_;
   double pitch = -(current_traj.pitch + pitch_offset_);  //世界坐标系下pitch向上为负
+  debug_fly_time = current_traj.fly_time;
   return {true, false, yaw, pitch};
 }
 
