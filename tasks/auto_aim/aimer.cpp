@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -22,6 +23,10 @@ Aimer::Aimer(const std::string & config_path)
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
   low_speed_delay_time_ = yaml["low_speed_delay_time"].as<double>();
   decision_speed_ = yaml["decision_speed"].as<double>();
+  if (yaml["wait_plate_speed"])
+    wait_plate_speed_ = std::max(0.0, yaml["wait_plate_speed"].as<double>());
+  if (yaml["wait_plate_tolerance"])
+    wait_plate_tol_ = std::max(0.0, yaml["wait_plate_tolerance"].as<double>()) / 57.3;
   if (yaml["left_yaw_offset"].IsDefined() && yaml["right_yaw_offset"].IsDefined()) {
     left_yaw_offset_ = yaml["left_yaw_offset"].as<double>() / 57.3;    // degree to rad
     right_yaw_offset_ = yaml["right_yaw_offset"].as<double>() / 57.3;  // degree to rad
@@ -33,9 +38,16 @@ io::Command Aimer::aim(
   std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
-  if (targets.empty()) return {false, false, 0, 0};
+  if (targets.empty()) {
+    wait_plate_active_ = false;
+    return {false, false, 0, 0};
+  }
   auto target = targets.front();
 
+  const double w_abs = std::abs(target.ekf_x()[7]);
+  wait_plate_active_ =
+    wait_plate_speed_ > 0 && (w_abs > wait_plate_speed_ ||
+                              (wait_plate_active_ && w_abs > 0.7 * wait_plate_speed_));
   auto ekf = target.ekf();
   double delay_time =
     target.ekf_x()[7] > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
@@ -145,7 +157,7 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
   auto armor_num = armor_xyza_list.size();
   // 如果装甲板未发生过跳变，则只有当前装甲板的位置已知
-  if (!target.jumped) return {true, armor_xyza_list[0]};
+  if (!target.jumped) return {true, armor_xyza_list[0], 0};
 
   // 整车旋转中心的球坐标yaw
   auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
@@ -157,6 +169,20 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     delta_angle_list.emplace_back(delta_angle);
   }
 
+  if (wait_plate_active_) {
+    int best = 0;
+    double best_delta = 1e9;
+    for (int i = 0; i < armor_num; i++) {
+      auto az = std::atan2(armor_xyza_list[i][1], armor_xyza_list[i][0]);
+      auto delta = std::abs(tools::limit_rad(az - center_yaw));
+      if (delta < best_delta) {
+        best_delta = delta;
+        best = i;
+      }
+    }
+    Eigen::Vector4d aim{ekf_x[0], ekf_x[2], armor_xyza_list[best][2], armor_xyza_list[best][3]};
+    return {true, aim, best};
+  }
   // 不考虑小陀螺
   if (std::abs(target.ekf_x()[8]) <= 2 && target.name != ArmorName::outpost) {
     // 选择在可射击范围内的装甲板
@@ -168,7 +194,7 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     // 绝无可能
     if (id_list.empty()) {
       tools::logger()->warn("Empty id list!");
-      return {false, armor_xyza_list[0]};
+      return {false, armor_xyza_list[0], 0};
     }
 
     // 锁定模式：防止在两个都呈45度的装甲板之间来回切换
@@ -179,12 +205,12 @@ AimPoint Aimer::choose_aim_point(const Target & target)
       if (lock_id_ != id0 && lock_id_ != id1)
         lock_id_ = (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
 
-      return {true, armor_xyza_list[lock_id_]};
+      return {true, armor_xyza_list[lock_id_], static_cast<int>(lock_id_)};
     }
 
     // 只有一个装甲板在可射击范围内时，退出锁定模式
     lock_id_ = -1;
-    return {true, armor_xyza_list[id_list[0]]};
+    return {true, armor_xyza_list[id_list[0]], id_list[0]};
   }
 
   double coming_angle, leaving_angle;
@@ -199,11 +225,13 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   // 在小陀螺时，一侧的装甲板不断出现，另一侧的装甲板不断消失，显然前者被打中的概率更高
   for (int i = 0; i < armor_num; i++) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-    if (ekf_x[7] > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
-    if (ekf_x[7] < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};
+    if (ekf_x[7] > 0 && delta_angle_list[i] < leaving_angle)
+      return {true, armor_xyza_list[i], i};
+    if (ekf_x[7] < 0 && delta_angle_list[i] > -leaving_angle)
+      return {true, armor_xyza_list[i], i};
   }
 
-  return {false, armor_xyza_list[0]};
+  return {false, armor_xyza_list[0], 0};
 }
 
 }  // namespace auto_aim
