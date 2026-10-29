@@ -24,6 +24,18 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
+  q_accel_xy_ = yaml["q_accel_xy"] ? yaml["q_accel_xy"].as<double>() : 100.0;
+  q_accel_z_ = yaml["q_accel_z"] ? yaml["q_accel_z"].as<double>() : 100.0;
+  q_accel_w_ = yaml["q_accel_w"] ? yaml["q_accel_w"].as<double>() : 400.0;
+  qw_alpha0_ = yaml["q_accel_w_alpha0"] ? yaml["q_accel_w_alpha0"].as<double>() : 1.0;
+  qw_scale_ = yaml["q_accel_w_alpha_scale"] ? yaml["q_accel_w_alpha_scale"].as<double>() : 0.6;
+  qw_gain_ = yaml["q_accel_w_max_gain"] ? yaml["q_accel_w_max_gain"].as<double>() : 1.0;
+  qz_spin_w0_ = yaml["q_accel_z_spin_w0"] ? yaml["q_accel_z_spin_w0"].as<double>() : 0.0;
+  qz_spin_scale_ =
+    yaml["q_accel_z_spin_scale"] ? yaml["q_accel_z_spin_scale"].as<double>() : 2.0;
+  if (qz_spin_scale_ <= 0.0) qz_spin_w0_ = 0.0;
+  r_yaw_ = yaml["R_yaw"] ? yaml["R_yaw"].as<double>() : 4e-3;
+  r_pitch_ = yaml["R_pitch"] ? yaml["R_pitch"].as<double>() : 4e-3;
 }
 
 std::string Tracker::state() const { return state_; }
@@ -80,11 +92,14 @@ std::list<Target> Tracker::track(
   }
 
   // 收敛效果检测：
-  if (
-    std::accumulate(
-      target_.ekf().recent_nis_failures.begin(), target_.ekf().recent_nis_failures.end(), 0) >=
-    (0.4 * target_.ekf().window_size)) {
-    tools::logger()->debug("[Target] Bad Converge Found!");
+  const auto & nis_failures = target_.ekf().recent_nis_failures;
+  const int nis_window = static_cast<int>(nis_failures.size());
+  const int nis_fails = std::accumulate(nis_failures.begin(), nis_failures.end(), 0);
+  const double nis_fail_rate = nis_window > 0 ? static_cast<double>(nis_fails) / nis_window : 0.0;
+  if (nis_window >= 50 && nis_fail_rate >= 0.6) {
+    tools::logger()->debug(
+      "[Target] Bad Converge Found! nis_fail_rate={:.2f} ({}/{})", nis_fail_rate, nis_fails,
+      nis_window);
     state_ = "lost";
     return {};
   }
@@ -242,22 +257,30 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 
   if (is_balance) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
-    target_ = Target(armor, t, 0.2, 2, P0_dig);
+    target_ = Target(
+      armor, t, 0.2, 2, P0_dig, q_accel_xy_, q_accel_z_, q_accel_w_, r_yaw_, r_pitch_, qw_alpha0_,
+      qw_scale_, qw_gain_, qz_spin_w0_, qz_spin_scale_);
   }
 
   else if (armor.name == ArmorName::outpost) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.2765, 3, P0_dig);
+    target_ = Target(
+      armor, t, 0.2765, 3, P0_dig, q_accel_xy_, q_accel_z_, q_accel_w_, r_yaw_, r_pitch_, qw_alpha0_,
+      qw_scale_, qw_gain_, qz_spin_w0_, qz_spin_scale_);
   }
 
   else if (armor.name == ArmorName::base) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.3205, 3, P0_dig);
+    target_ = Target(
+      armor, t, 0.3205, 3, P0_dig, q_accel_xy_, q_accel_z_, q_accel_w_, r_yaw_, r_pitch_, qw_alpha0_,
+      qw_scale_, qw_gain_, qz_spin_w0_, qz_spin_scale_);
   }
 
   else {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
-    target_ = Target(armor, t, 0.2, 4, P0_dig);
+    target_ = Target(
+      armor, t, 0.2, 4, P0_dig, q_accel_xy_, q_accel_z_, q_accel_w_, r_yaw_, r_pitch_, qw_alpha0_,
+      qw_scale_, qw_gain_, qz_spin_w0_, qz_spin_scale_);
   }
 
   return true;

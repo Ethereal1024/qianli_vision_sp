@@ -43,6 +43,9 @@ public:
   size_t window_size = 100;
   double last_nis;
 
+  // χ²(4) 95% 分位
+  double nis_threshold = 9.488;
+
 private:
   Eigen::MatrixXd I;
   std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> x_add;

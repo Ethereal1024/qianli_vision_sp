@@ -38,6 +38,10 @@ private:
   int temp_lost_count_;
   int outpost_max_temp_lost_count_;
   int normal_temp_lost_count_;
+  double q_accel_xy_, q_accel_z_, q_accel_w_;
+  double qw_alpha0_, qw_scale_, qw_gain_;
+  double qz_spin_w0_, qz_spin_scale_;
+  double r_yaw_, r_pitch_;
   std::string state_, pre_state_;
   Target target_;
   std::chrono::steady_clock::time_point last_timestamp_;

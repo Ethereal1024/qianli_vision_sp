@@ -1,15 +1,26 @@
 #include "target.hpp"
 
+#include <algorithm>
 #include <numeric>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 
+namespace
+{
+constexpr double kQwWindow = 0.5;
+constexpr double kQwTau = 0.35;
+constexpr double kQzSpinMin = 0.15;
+constexpr double kRAngleScale = 0.1;
+}  // namespace
+
 namespace auto_aim
 {
 Target::Target(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
-  Eigen::VectorXd P0_dig)
+  Eigen::VectorXd P0_dig, double q_accel_xy, double q_accel_z, double q_accel_w, double r_yaw,
+  double r_pitch, double qw_alpha0, double qw_scale, double qw_gain, double qz_spin_w0,
+  double qz_spin_scale)
 : name(armor.name),
   armor_type(armor.type),
   jumped(false),
@@ -19,6 +30,16 @@ Target::Target(
   t_(t),
   is_switch_(false),
   is_converged_(false),
+  q_accel_xy_(q_accel_xy),
+  q_accel_z_(q_accel_z),
+  q_accel_w_(q_accel_w),
+  qw_alpha0_(qw_alpha0),
+  qw_scale_(qw_scale),
+  qw_gain_(qw_gain),
+  qz_spin_w0_(qz_spin_w0),
+  qz_spin_scale_(qz_spin_scale),
+  r_yaw_(r_yaw),
+  r_pitch_(r_pitch),
   switch_count_(0)
 {
   auto r = radius;
@@ -93,13 +114,48 @@ void Target::predict(double dt)
 
   // Piecewise White Noise Model
   // https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/07-Kalman-Filter-Math.ipynb
-  double v1, v2;
+  double v1, v1z, v2;
   if (name == ArmorName::outpost) {
     v1 = 10;   // 前哨站加速度方差
+    v1z = 10;
     v2 = 0.1;  // 前哨站角加速度方差
   } else {
-    v1 = 100;  // 加速度方差
-    v2 = 400;  // 角加速度方差
+    v1 = q_accel_xy_;
+    v1z = q_accel_z_;
+    v2 = q_accel_w_;
+    if (qz_spin_w0_ > 0.0) {
+      const double over_w = std::max(0.0, std::abs(ekf_.x[7]) - qz_spin_w0_) / qz_spin_scale_;
+      qz_mult_ = std::max(kQzSpinMin, 1.0 / (1.0 + over_w * over_w));
+      v1z = q_accel_z_ * qz_mult_;
+    }
+    if (qw_gain_ > 1.0) {
+      if (dt > 1e-4 && dt < 0.05) {
+        qw_clock_ += dt;
+        qw_hist_t_[qw_hist_i_] = qw_clock_;
+        qw_hist_w_[qw_hist_i_] = std::abs(ekf_.x[7]);
+        qw_hist_i_ = (qw_hist_i_ + 1) % kQwHist;
+        if (qw_hist_n_ < kQwHist) ++qw_hist_n_;
+        const int newest = (qw_hist_i_ - 1 + kQwHist) % kQwHist;
+        int j = newest;
+        for (int k = 0; k < qw_hist_n_; ++k) {
+          const double span = qw_clock_ - qw_hist_t_[j];
+          if (span >= kQwWindow) {
+            const double d2 = std::abs(qw_hist_w_[newest] - qw_hist_w_[j]) / span;
+            if (!qw_d2_init_) {
+              qw_d2_ = d2;
+              qw_d2_init_ = true;
+            } else {
+              qw_d2_ += (d2 - qw_d2_) * std::min(1.0, dt / kQwTau);
+            }
+            const double over = std::max(0.0, qw_d2_ - qw_alpha0_) / qw_scale_;
+            qw_mult_ = std::min(qw_gain_, 1.0 + over * over);
+            break;
+          }
+          j = (j - 1 + kQwHist) % kQwHist;
+        }
+      }
+      v2 = q_accel_w_ * qw_mult_;
+    }
   }
   auto a = dt * dt * dt * dt / 4;
   auto b = dt * dt * dt / 2;
@@ -111,8 +167,8 @@ void Target::predict(double dt)
     {b * v1, c * v1,      0,      0,      0,      0,      0,      0, 0, 0, 0},
     {     0,      0, a * v1, b * v1,      0,      0,      0,      0, 0, 0, 0},
     {     0,      0, b * v1, c * v1,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0, a * v1, b * v1,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0, b * v1, c * v1,      0,      0, 0, 0, 0},
+    {     0,      0,      0,      0, a * v1z, b * v1z,     0,      0, 0, 0, 0},
+    {     0,      0,      0,      0, b * v1z, c * v1z,     0,      0, 0, 0, 0},
     {     0,      0,      0,      0,      0,      0, a * v2, b * v2, 0, 0, 0},
     {     0,      0,      0,      0,      0,      0, b * v2, c * v2, 0, 0, 0},
     {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0},
@@ -192,8 +248,8 @@ void Target::update_ypda(const Armor & armor, int id)
   auto center_yaw = std::atan2(armor.xyz_in_world[1], armor.xyz_in_world[0]);
   auto delta_angle = tools::limit_rad(armor.ypr_in_world[0] - center_yaw);
   Eigen::VectorXd R_dig{
-    {4e-3, 4e-3, log(std::abs(delta_angle) + 1) + 1,
-     log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 9e-2}};
+    {r_yaw_, r_pitch_, log(std::abs(delta_angle) + 1) + 1,
+     (log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 9e-2) * kRAngleScale}};
 
   //测量过程噪声偏差的方差
   Eigen::MatrixXd R = R_dig.asDiagonal();
@@ -219,6 +275,8 @@ void Target::update_ypda(const Armor & armor, int id)
   const Eigen::VectorXd & ypr = armor.ypr_in_world;
   Eigen::VectorXd z{{ypd[0], ypd[1], ypd[2], ypr[0]}};  //获得观测量
 
+  res4_ = tools::limit_rad(z[3] - (ekf_.x[6] + id * 2 * CV_PI / armor_num_));
+  sd4_ = std::sqrt((H.row(3) * ekf_.P * H.row(3).transpose())(0, 0) + R(3, 3));
   ekf_.update(z, H, R, h, z_subtract);
 }
 

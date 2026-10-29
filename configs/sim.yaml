@@ -48,6 +48,16 @@ max_rectangular_error: 25 # degree
 min_detect_count: 5
 max_temp_lost_count: 15
 outpost_max_temp_lost_count: 75
+q_accel_xy: 12
+q_accel_z: 24
+q_accel_z_spin_w0: 3.0
+q_accel_z_spin_scale: 2.0
+q_accel_w: 5
+q_accel_w_alpha0: 1.0
+q_accel_w_alpha_scale: 0.6
+q_accel_w_max_gain: 4
+R_pitch: 2.7e-5
+R_yaw: 1.5e-4
 
 #####-----aimer参数-----#####
 yaw_offset: 0
