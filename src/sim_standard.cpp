@@ -1,6 +1,8 @@
 #include <fmt/core.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <opencv2/opencv.hpp>
 #include <string>
 
@@ -37,6 +39,11 @@ int main(int argc, char * argv[])
   const auto yaml = tools::load(config_path);
   const double print_hz = yaml["print_hz"] ? yaml["print_hz"].as<double>() : 1.0;
   const bool use_shooter = yaml["use_shooter"] ? yaml["use_shooter"].as<bool>() : true;
+  const bool diag_on = std::getenv("SIM_DIAG") != nullptr;
+  const bool show = std::getenv("SIM_SHOW") != nullptr;
+  const bool time_on = std::getenv("SIM_TIME") != nullptr;
+  double ms_det = 0, ms_trk = 0, ms_aim = 0, ms_gui = 0;
+  int frames_since_print = 0;
 
   const auto image_size = yaml["image_size"];
 
@@ -82,43 +89,102 @@ int main(int argc, char * argv[])
     solver.set_R_gimbal2world(q);
     const Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
+    const auto tick0 = std::chrono::steady_clock::now();
     auto armors = detector.detect(img);
+    const auto tick1 = std::chrono::steady_clock::now();
     auto targets = tracker.track(armors, t);
+    const auto tick2 = std::chrono::steady_clock::now();
     auto command = aimer.aim(targets, t, cboard.bullet_speed);
     if (use_shooter) command.shoot = shooter.shoot(command, aimer, targets, ypr);
     cboard.send(command);
+    const auto tick3 = std::chrono::steady_clock::now();
+    if (time_on) {
+      ms_det += 1e3 * tools::delta_time(tick1, tick0);
+      ms_trk += 1e3 * tools::delta_time(tick2, tick1);
+      ms_aim += 1e3 * tools::delta_time(tick3, tick2);
+    }
+    if (diag_on && !targets.empty() && !armors.empty()) {
+      const auto & tg = targets.front();
+      const auto ex = tg.ekf_x();
+      const auto plates = tg.armor_xyza_list();
+      Eigen::Vector3d pred = Eigen::Vector3d::Zero();
+      if (!plates.empty()) pred = plates.front().head(3);
+      const double pred_el = std::atan2(pred[2], std::hypot(pred[0], pred[1])) * 57.29578;
+      const double pred_az = std::atan2(pred[1], pred[0]) * 57.29578;
+      double aim_el = 0, aim_az = 0;
+      int aim_id = aimer.debug_aim_point.id;
+      double aim_ang = 0;
+      if (aimer.debug_aim_point.valid) {
+        const Eigen::Vector3d aim = aimer.debug_aim_point.xyza.head(3);
+        aim_el = std::atan2(aim[2], std::hypot(aim[0], aim[1])) * 57.29578;
+        aim_az = std::atan2(aim[1], aim[0]) * 57.29578;
+        aim_ang = aimer.debug_aim_point.xyza[3] * 57.29578;
+      }
+      tools::logger()->info(
+        "[diag] {} {:.6f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} "
+        "{:.4f} {:.4f} {} {:.4f} {:.4f} {} {:.5f} {:.5f} {:.5f} {:.5f} {:.5f} {:.5f} "
+        "{:.5f} {:.5f} {} {} {:.4f} {:.5f} {:.5f} {:.4f} {:.4f} {:.4f}",
+        frames, tools::delta_time(t, std::chrono::steady_clock::time_point{}),
+        armors.front().ypd_in_world[1] * 57.29578, pred_el, ex[4], ex[5], ex[10],
+        ypr[1] * 57.29578, armors.front().ypd_in_world[0] * 57.29578, pred_az,
+        ypr[0] * 57.29578, aim_el, aim_az, aimer.debug_aim_point.valid ? 1 : 0,
+        command.pitch * 57.29578, command.yaw * 57.29578,
+        command.shoot ? 1 : 0,
+        ex[0], ex[1], ex[2], ex[3], ex[6], ex[7], ex[8], ex[9], aim_id,
+        static_cast<int>(std::count_if(
+          armors.begin(), armors.end(),
+          [&](const auto & a) { return a.name == armors.front().name && a.type == armors.front().type; })),
+        aim_ang,
+        aimer.debug_dt, aimer.debug_fly_time,
+        armors.front().ypr_in_world[0] * 57.29578,
+        targets.front().res4() * 57.29578, targets.front().sd4() * 57.29578);
+    }
     frames++;
+    frames_since_print++;
+    const auto tick4 = std::chrono::steady_clock::now();
+    if (show) {
+      tools::draw_text(img, fmt::format("[{}]", tracker.state()), {10, 30}, {255, 255, 255});
 
-    tools::draw_text(img, fmt::format("[{}]", tracker.state()), {10, 30}, {255, 255, 255});
+      for (const auto & armor : armors) tools::draw_points(img, armor.points, {0, 255, 0});
 
-    for (const auto & armor : armors) tools::draw_points(img, armor.points, {0, 255, 0});
+      if (!targets.empty()) {
+        auto target = targets.front();
 
-    if (!targets.empty()) {
-      auto target = targets.front();
+        for (const Eigen::Vector4d & xyza : target.armor_xyza_list()) {
+          auto image_points =
+            solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
+          tools::draw_points(img, image_points, {0, 255, 0});
+        }
 
-      for (const Eigen::Vector4d & xyza : target.armor_xyza_list()) {
+        auto aim_point = aimer.debug_aim_point;
+        Eigen::Vector4d aim_xyza = aim_point.xyza;
         auto image_points =
-          solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
-        tools::draw_points(img, image_points, {0, 255, 0});
+          solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
+        if (aim_point.valid)
+          tools::draw_points(img, image_points, {0, 0, 255});
+        else
+          tools::draw_points(img, image_points, {255, 0, 0});
       }
 
-      auto aim_point = aimer.debug_aim_point;
-      Eigen::Vector4d aim_xyza = aim_point.xyza;
-      auto image_points =
-        solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-      if (aim_point.valid)
-        tools::draw_points(img, image_points, {0, 0, 255});
-      else
-        tools::draw_points(img, image_points, {255, 0, 0});
+      cv::resize(img, img, {}, 0.5, 0.5);
+      cv::imshow("sim_standard", img);
+      if (cv::waitKey(1) == 'q') break;
     }
 
-    cv::resize(img, img, {}, 0.5, 0.5);
-    cv::imshow("sim_standard", img);
-    if (cv::waitKey(1) == 'q') break;
+    if (time_on) ms_gui += 1e3 * tools::delta_time(std::chrono::steady_clock::now(), tick4);
 
     const auto now = std::chrono::steady_clock::now();
     if (print_hz > 0 && now >= next_print) {
       next_print = now + std::chrono::microseconds(static_cast<int64_t>(1e6 / print_hz));
+      const double n = std::max(1, frames_since_print);
+      if (time_on) {
+        tools::logger()->info(
+          "[time] ms/frame: detect {:.1f} track {:.1f} aim {:.1f} draw {:.1f} | total {:.1f}",
+          ms_det / n, ms_trk / n, ms_aim / n, ms_gui / n,
+          (ms_det + ms_trk + ms_aim + ms_gui) / n);
+        ms_det = ms_trk = ms_aim = ms_gui = 0;
+        frames_since_print = 0;
+      }
       tools::logger()->info(
         "[sim] #{:6d} {:.0f}fps det {} tgt {} | mode {} v {:.1f} | cmd control={} shoot={} "
         "yaw={:+.2f} pitch={:+.2f} deg | imu yaw={:+.2f} pitch={:+.2f} deg",
