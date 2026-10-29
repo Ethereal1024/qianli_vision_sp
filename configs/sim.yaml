@@ -75,6 +75,12 @@ first_tolerance: 3
 second_tolerance: 2
 judge_distance: 2
 auto_fire: true
+max_vel_change: 0.35
+max_vel_change_z: 0.6
+vel_window: 0.2
+steady_release: 0.5
+block_windows: 1.0
+pitch_tolerance: 0.8
 
 #####-----相机 / 下位机-----#####
 camera_name: "sim"
