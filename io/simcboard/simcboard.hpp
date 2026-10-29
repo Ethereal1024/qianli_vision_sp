@@ -1,9 +1,12 @@
 #ifndef IO__SIMCBOARD__SIMCBOARD_HPP
 #define IO__SIMCBOARD__SIMCBOARD_HPP
 
+#include <atomic>
 #include <chrono>
 #include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -22,6 +25,7 @@ class SimCBoard : public CBoardBase
 {
 public:
   SimCBoard(CBoard & owner, const std::string & config_path);
+  ~SimCBoard() override;
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp) override;
 
@@ -39,6 +43,9 @@ private:
   bool read_cboard_state();
   void push(Sample sample);
 
+  void write_command(const Command & command);
+  void start_publisher();
+  void publish_loop();
   CBoard & owner_;
 
   SimShmConfig cfg_;
@@ -51,6 +58,15 @@ private:
   std::chrono::steady_clock::time_point next_open_attempt_ =
     std::chrono::steady_clock::time_point::min();
 
+  std::mutex cmd_mutex_;
+  Command latest_command_{};
+  Command prev_command_{};
+  std::chrono::steady_clock::time_point prev_send_t_ = std::chrono::steady_clock::now();
+  double cmd_period_s_ = 0.015;
+  bool have_command_ = false;
+  std::thread publisher_;
+  std::atomic<bool> publisher_stop_{false};
+  bool publisher_started_ = false;
   static constexpr size_t kHistory = 256;
 };
 

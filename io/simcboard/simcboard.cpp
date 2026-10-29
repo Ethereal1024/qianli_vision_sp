@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <thread>
@@ -74,7 +75,8 @@ void SimCBoard::tick()
 
 bool SimCBoard::read_cboard_state()
 {
-  const int n = state_ch_.read(state_buffer_.data(), state_buffer_.size());
+  uint64_t stamp_ns = 0;
+  const int n = state_ch_.read(state_buffer_.data(), state_buffer_.size(), &stamp_ns);
   if (n <= 0) return false;
 
   const uint8_t * p = state_buffer_.data();
@@ -89,7 +91,7 @@ bool SimCBoard::read_cboard_state()
   owner_.bullet_speed = load_f64(p, 40);
   owner_.ft_angle = load_f64(p, 48);
 
-  push({q, std::chrono::steady_clock::now()});
+  push({q, stamp_ns != 0 ? steady_from_realtime(stamp_ns) : std::chrono::steady_clock::now()});
   return true;
 }
 
@@ -124,6 +126,87 @@ Eigen::Quaterniond SimCBoard::imu_at(std::chrono::steady_clock::time_point times
 }
 
 void SimCBoard::send(Command command)
+{
+  {
+    std::lock_guard<std::mutex> lock(cmd_mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    if (!have_command_) {
+      prev_command_ = command;
+      have_command_ = true;
+    } else {
+      const double dt = std::chrono::duration<double>(now - prev_send_t_).count();
+      if (dt > 1e-4 && dt < 1.0) cmd_period_s_ = 0.8 * cmd_period_s_ + 0.2 * dt;
+      prev_command_ = latest_command_;
+    }
+    latest_command_ = command;
+    prev_send_t_ = now;
+  }
+  start_publisher();
+}
+
+void SimCBoard::start_publisher()
+{
+  if (publisher_started_) return;
+  publisher_started_ = true;
+  if (!cmd_ch_.opened()) cmd_ch_.open_writer(cfg_.cboard_cmd, 4, SIM_CBOARD_CMD_SIZE);
+  publisher_ = std::thread([this] { publish_loop(); });
+}
+
+SimCBoard::~SimCBoard()
+{
+  publisher_stop_ = true;
+  if (publisher_.joinable()) publisher_.join();
+}
+
+void SimCBoard::publish_loop()
+{
+  constexpr auto kPeriod = std::chrono::microseconds(2500);
+  constexpr double kMaxLag = 0.004;
+  constexpr double kMaxRate = 120.0 * M_PI / 180.0;
+  Command out{};
+  bool have_out = false;
+  auto last = std::chrono::steady_clock::now();
+  auto next = last;
+  while (!publisher_stop_) {
+    Command target, base;
+    double period = 0.015;
+    std::chrono::steady_clock::time_point t_send;
+    {
+      std::lock_guard<std::mutex> lock(cmd_mutex_);
+      target = latest_command_;
+      base = prev_command_;
+      period = cmd_period_s_;
+      t_send = prev_send_t_;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(now - last).count();
+    last = now;
+    if (!have_out || !target.control) {
+      out = target;
+      have_out = true;
+    } else {
+      const double f = std::clamp(
+        std::chrono::duration<double>(now - t_send).count() / std::max(period, 1e-3), 0.0, 1.0);
+      const double want_yaw =
+        std::remainder(base.yaw + f * std::remainder(target.yaw - base.yaw, 2 * M_PI), 2 * M_PI);
+      const double want_pitch = base.pitch + f * (target.pitch - base.pitch);
+      const double step = kMaxRate * std::max(dt, 0.0);
+      const double dyaw = std::remainder(want_yaw - out.yaw, 2 * M_PI);
+      out.yaw = std::remainder(out.yaw + std::clamp(dyaw, -step, step), 2 * M_PI);
+      out.pitch = out.pitch + std::clamp(want_pitch - out.pitch, -step, step);
+      out.control = target.control;
+      out.shoot = target.shoot;
+      out.horizon_distance = target.horizon_distance;
+    }
+    write_command(out);
+    next += kPeriod;
+    if (now - next > std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                           std::chrono::duration<double>(kMaxLag)))
+      next = now;
+    std::this_thread::sleep_until(next);
+  }
+}
+void SimCBoard::write_command(const Command & command)
 {
   if (!cmd_ch_.opened()) cmd_ch_.open_writer(cfg_.cboard_cmd, 4, SIM_CBOARD_CMD_SIZE);
   if (!cmd_ch_.opened()) return;
