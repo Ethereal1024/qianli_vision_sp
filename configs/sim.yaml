@@ -1,0 +1,82 @@
+#####-----仿真共享内存参数-----#####
+sim_shm:
+  camera_frames: "/dev/shm/sim_camera_frames"
+  cboard_state:  "/dev/shm/sim_cboard_state"
+  cboard_cmd:    "/dev/shm/sim_cboard_cmd"
+  wait_timeout_ms: 8000
+  open_retry_ms: 500
+
+#####-----运行参数-----#####
+print_hz: 1.0
+use_shooter: true
+
+#####-----敌方颜色-----#####
+enemy_color: "blue"
+
+#####-----神经网络参数-----#####
+backend: tensorrt
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx
+yolo11_model_path: assets/yolo11.xml
+yolov8_model_path: assets/yolov8.xml
+yolov5_model_path: assets/yolov5.onnx
+device: CPU
+min_confidence: 0.8
+use_traditional: true
+
+#####-----ROI-----#####
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 15
+outpost_max_temp_lost_count: 75
+
+#####-----aimer参数-----#####
+yaw_offset: 0
+pitch_offset: 0
+comming_angle: 60
+leaving_angle: 20
+decision_speed: 8
+high_speed_delay_time: 0.010
+low_speed_delay_time: 0.010
+
+#####-----shooter参数-----#####
+first_tolerance: 3
+second_tolerance: 2
+judge_distance: 2
+auto_fire: true
+
+#####-----相机 / 下位机-----#####
+camera_name: "sim"
+cboard_name: "sim"
+exposure_ms: 20
+
+
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+
+R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+t_camera2gimbal: [-0.0305, 0, 0.0257]
+
+
+image_size: [1440, 1080]
+camera_matrix: [2414.935942, 0, 717.26243, 0, 2414.935942, 582.685405, 0, 0, 1]
+distort_coeffs: [-0.020945, 0.150281, -0.000652, -0.001686, 0]
