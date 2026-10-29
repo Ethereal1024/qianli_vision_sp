@@ -3,12 +3,28 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cstring>
 
 namespace io::sim
 {
+
+std::chrono::steady_clock::time_point steady_from_realtime(uint64_t realtime_ns)
+{
+  static const std::chrono::nanoseconds offset = [] {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    const auto rt = std::chrono::nanoseconds(
+      static_cast<int64_t>(ts.tv_sec) * 1000000000ll + static_cast<int64_t>(ts.tv_nsec));
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch() - rt);
+  }();
+  const auto rt = std::chrono::nanoseconds(static_cast<int64_t>(realtime_ns));
+  return std::chrono::steady_clock::time_point(
+    std::chrono::duration_cast<std::chrono::steady_clock::duration>(rt + offset));
+}
 
 std::string shm_name(const std::string & path)
 {

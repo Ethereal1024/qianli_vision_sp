@@ -15,6 +15,7 @@ struct SimShmConfig
   int wait_timeout_ms = 8000;
   int open_retry_ms = 500;
 
+  double frame_lag_ms = 0.0;
   static SimShmConfig from_yaml(const std::string & config_path);
 };
 

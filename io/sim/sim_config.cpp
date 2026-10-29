@@ -31,6 +31,7 @@ SimShmConfig SimShmConfig::from_yaml(const std::string & config_path)
 
   read_if(node, "wait_timeout_ms", cfg.wait_timeout_ms);
   read_if(node, "open_retry_ms", cfg.open_retry_ms);
+  read_if(node, "frame_lag_ms", cfg.frame_lag_ms);
 
   return cfg;
 }

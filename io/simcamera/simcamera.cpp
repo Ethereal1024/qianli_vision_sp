@@ -80,7 +80,8 @@ void SimCamera::read(cv::Mat & img, std::chrono::steady_clock::time_point & time
       continue;
     }
 
-    const int n = frames_.read(buffer_.data(), buffer_.size());
+    uint64_t stamp_ns = 0;
+    const int n = frames_.read(buffer_.data(), buffer_.size(), &stamp_ns);
     if (n < 0) {
       tools::logger()->warn("[sim] frame channel read error {}, reopening", n);
       frames_.close();
@@ -93,7 +94,14 @@ void SimCamera::read(cv::Mat & img, std::chrono::steady_clock::time_point & time
 
     cv::Mat rgb(height_, width_, CV_8UC3, buffer_.data());
     cv::cvtColor(rgb, img, cv::COLOR_RGB2BGR);
-    timestamp = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (stamp_ns != 0) {
+      timestamp = steady_from_realtime(stamp_ns) -
+                  std::chrono::microseconds(static_cast<int64_t>(cfg_.frame_lag_ms * 1000.0));
+      if (timestamp > now) timestamp = now;
+    } else {
+      timestamp = now;
+    }
     return;
   }
 }

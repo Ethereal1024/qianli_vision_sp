@@ -1,6 +1,7 @@
 #ifndef IO__SIM__SIMG_HPP
 #define IO__SIM__SIMG_HPP
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -24,6 +25,8 @@ enum : size_t
   SIMG_OFF_TIMESTAMP = 32,
   SIMG_OFF_META = 40,
 };
+
+std::chrono::steady_clock::time_point steady_from_realtime(uint64_t realtime_ns);
 
 std::string shm_name(const std::string & path);
 
