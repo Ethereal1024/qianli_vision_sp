@@ -5,7 +5,7 @@ sim_shm:
   cboard_cmd:    "/dev/shm/sim_cboard_cmd"
   wait_timeout_ms: 8000
   open_retry_ms: 500
-  frame_lag_ms: 50
+  frame_lag_ms: 0
 
 #####-----运行参数-----#####
 print_hz: 1.0
