@@ -5,6 +5,7 @@ sim_shm:
   cboard_cmd:    "/dev/shm/sim_cboard_cmd"
   wait_timeout_ms: 8000
   open_retry_ms: 500
+  # 画面时延补偿(ms)：帧头已带内容时刻，取 0；补偿量不当会使静止靶持续摆动
   frame_lag_ms: 0
 
 #####-----运行参数-----#####
