@@ -1,17 +1,35 @@
 #include "target.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <chrono>
+#include <cstdlib>
+#include <iomanip>
 #include <numeric>
+#include <sstream>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 
 namespace
 {
-constexpr double kQwWindow = 0.5;
-constexpr double kQwTau = 0.35;
-constexpr double kQzSpinMin = 0.15;
+// 板角度量测（第 4 维）噪声缩放，乘在 R_dig[3] 上：1.0 时 R ≈ 0.098 rad²（等效 18°），
+// 比板姿态解算的实际噪声大一个数量级；0.1 为实测标定值，不开放到 yaml
 constexpr double kRAngleScale = 0.1;
+
+// 规范规定任意两块装甲模块下边缘高度差 ≤ 100 mm，以四板均值为中心即 |t_i| ≤ 50 mm
+constexpr double kHTableClamp = 0.05;
+
+// 死区（米）：一对板高差的一半小于该值取 0。真机对侧等高的实测残差为几毫米到 1 cm，
+// 落在死区内，此时修正量为 0，h_armor_xyz 与不启用高度表时相同
+constexpr double kHTableDeadZone = 0.015;
+
+// 收敛前 z 与 r 仍为初值，此期间的板高量测不可用
+constexpr int kHTableWarmup = 5;
+
+// 慢平均用前几帧均值初始化：单帧板高噪声 sd ≈ 1.3 cm，单样本时一对板的高度差会在
+// 死区附近抖动
+constexpr int kHTableSeed = 4;
 }  // namespace
 
 namespace auto_aim
@@ -19,8 +37,7 @@ namespace auto_aim
 Target::Target(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
   Eigen::VectorXd P0_dig, double q_accel_xy, double q_accel_z, double q_accel_w, double r_yaw,
-  double r_pitch, double qw_alpha0, double qw_scale, double qw_gain, double qz_spin_w0,
-  double qz_spin_scale)
+  double r_pitch, double h_table_gain, double huber_k)
 : name(armor.name),
   armor_type(armor.type),
   jumped(false),
@@ -33,14 +50,11 @@ Target::Target(
   q_accel_xy_(q_accel_xy),
   q_accel_z_(q_accel_z),
   q_accel_w_(q_accel_w),
-  qw_alpha0_(qw_alpha0),
-  qw_scale_(qw_scale),
-  qw_gain_(qw_gain),
-  qz_spin_w0_(qz_spin_w0),
-  qz_spin_scale_(qz_spin_scale),
   r_yaw_(r_yaw),
   r_pitch_(r_pitch),
-  switch_count_(0)
+  switch_count_(0),
+  h_table_gain_(h_table_gain),
+  huber_k_(huber_k)
 {
   auto r = radius;
   priority = armor.priority;
@@ -95,7 +109,6 @@ void Target::predict(std::chrono::steady_clock::time_point t)
 
 void Target::predict(double dt)
 {
-  // 状态转移矩阵
   // clang-format off
   Eigen::MatrixXd F{
     {1, dt,  0,  0,  0,  0,  0,  0,  0,  0,  0},
@@ -123,39 +136,6 @@ void Target::predict(double dt)
     v1 = q_accel_xy_;
     v1z = q_accel_z_;
     v2 = q_accel_w_;
-    if (qz_spin_w0_ > 0.0) {
-      const double over_w = std::max(0.0, std::abs(ekf_.x[7]) - qz_spin_w0_) / qz_spin_scale_;
-      qz_mult_ = std::max(kQzSpinMin, 1.0 / (1.0 + over_w * over_w));
-      v1z = q_accel_z_ * qz_mult_;
-    }
-    if (qw_gain_ > 1.0) {
-      if (dt > 1e-4 && dt < 0.05) {
-        qw_clock_ += dt;
-        qw_hist_t_[qw_hist_i_] = qw_clock_;
-        qw_hist_w_[qw_hist_i_] = std::abs(ekf_.x[7]);
-        qw_hist_i_ = (qw_hist_i_ + 1) % kQwHist;
-        if (qw_hist_n_ < kQwHist) ++qw_hist_n_;
-        const int newest = (qw_hist_i_ - 1 + kQwHist) % kQwHist;
-        int j = newest;
-        for (int k = 0; k < qw_hist_n_; ++k) {
-          const double span = qw_clock_ - qw_hist_t_[j];
-          if (span >= kQwWindow) {
-            const double d2 = std::abs(qw_hist_w_[newest] - qw_hist_w_[j]) / span;
-            if (!qw_d2_init_) {
-              qw_d2_ = d2;
-              qw_d2_init_ = true;
-            } else {
-              qw_d2_ += (d2 - qw_d2_) * std::min(1.0, dt / kQwTau);
-            }
-            const double over = std::max(0.0, qw_d2_ - qw_alpha0_) / qw_scale_;
-            qw_mult_ = std::min(qw_gain_, 1.0 + over * over);
-            break;
-          }
-          j = (j - 1 + kQwHist) % kQwHist;
-        }
-      }
-      v2 = q_accel_w_ * qw_mult_;
-    }
   }
   auto a = dt * dt * dt * dt / 4;
   auto b = dt * dt * dt / 2;
@@ -237,7 +217,56 @@ void Target::update(const Armor & armor)
   last_id = id;
   update_count_++;
 
+  update_height_table(armor, id);
   update_ypda(armor, id);
+}
+
+// 每块板相对两高度先验的慢变修正。取实测板高而非相对 EKF 的残差：z 随最近观测到的板更新，
+// 残差已被该步吸收。只取对径两板之差，z、整车高度、pitch 偏置等公共项相消。
+void Target::update_height_table(const Armor & armor, int id)
+{
+  if (armor_num_ != 4 || id < 0 || id >= 4) return;
+  if (update_count_ <= kHTableWarmup || this->diverged()) return;
+
+  const double meas_z = armor.xyz_in_world[2];
+
+  // [hres] 列序：t id 残差 实测板高 模型z 模型h 板高-z 板名；由环境变量 HTABLE 开启，
+  // gain = 0 时也输出，用于测量一对等高板的高度差噪声
+  static const bool h_table_log = std::getenv("HTABLE") != nullptr;
+  if (h_table_log) {
+    auto now = std::chrono::duration<double>(t_.time_since_epoch()).count();
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6) << now << ' ' << id << ' ' << std::setprecision(5)
+        << meas_z - h_armor_xyz(ekf_.x, id)[2] << ' ' << meas_z << ' ' << ekf_.x[4] << ' '
+        << ekf_.x[10] << ' ' << meas_z - ekf_.x[4] << ' ' << static_cast<int>(armor.name);
+    tools::logger()->debug("[hres] {}", oss.str());
+  }
+
+  if (h_table_gain_ <= 0.0) return;
+
+  if (!h_meas_valid_[id] || h_meas_count_[id] < kHTableSeed) {
+    h_meas_[id] = (h_meas_[id] * h_meas_count_[id] + meas_z) / (h_meas_count_[id] + 1);
+    h_meas_count_[id]++;
+    h_meas_valid_[id] = (h_meas_count_[id] >= kHTableSeed);
+  } else {
+    h_meas_[id] += h_table_gain_ * (meas_z - h_meas_[id]);
+  }
+
+  auto pair_offset = [](bool ok1, bool ok2, double m1, double m2) {
+    if (!ok1 || !ok2) return 0.0;
+    double half = 0.5 * (m1 - m2);
+    if (std::abs(half) <= kHTableDeadZone) return 0.0;
+    return std::clamp(half, -kHTableClamp, kHTableClamp);
+  };
+  h_pair_a_ = pair_offset(h_meas_valid_[0], h_meas_valid_[2], h_meas_[0], h_meas_[2]);
+  h_pair_b_ = pair_offset(h_meas_valid_[1], h_meas_valid_[3], h_meas_[1], h_meas_[3]);
+
+  if (h_table_log && update_count_ % 200 == 0) {
+    tools::logger()->debug(
+      "[Target] h_pair a={:.1f} b={:.1f} cm (plate h {:.1f} {:.1f} {:.1f} {:.1f} cm)",
+      h_pair_a_ * 100, h_pair_b_ * 100, h_meas_[0] * 100, h_meas_[1] * 100, h_meas_[2] * 100,
+      h_meas_[3] * 100);
+  }
 }
 
 void Target::update_ypda(const Armor & armor, int id)
@@ -275,8 +304,22 @@ void Target::update_ypda(const Armor & armor, int id)
   const Eigen::VectorXd & ypr = armor.ypr_in_world;
   Eigen::VectorXd z{{ypd[0], ypd[1], ypd[2], ypr[0]}};  //获得观测量
 
+  // 供离线标定 R_dig[3]
   res4_ = tools::limit_rad(z[3] - (ekf_.x[6] + id * 2 * CV_PI / armor_num_));
   sd4_ = std::sqrt((H.row(3) * ekf_.P * H.row(3).transpose())(0, 0) + R(3, 3));
+
+  // 板角度新息为重尾分布且 R 很小，单帧野值（板序号跳变、90° 歧义、误检）会使状态
+  // 大幅跳变，故按归一化新息逐维放大 R
+  if (huber_k_ > 0.0) {
+    const Eigen::VectorXd y = z_subtract(z, h(ekf_.x));
+    const Eigen::MatrixXd S = H * ekf_.P * H.transpose() + R;
+    for (int i = 0; i < R.rows(); ++i) {
+      const double s = std::sqrt(std::max(S(i, i), 1e-12));
+      const double u = std::abs(y[i]) / s;
+      if (u > huber_k_) R(i, i) *= u / huber_k_;
+    }
+  }
+
   ekf_.update(z, H, R, h, z_subtract);
 }
 
@@ -330,7 +373,13 @@ Eigen::Vector3d Target::h_armor_xyz(const Eigen::VectorXd & x, int id) const
   auto r = (use_l_h) ? x[8] + x[9] : x[8];
   auto armor_x = x[0] - r * std::cos(angle);
   auto armor_y = x[2] - r * std::sin(angle);
-  auto armor_z = (use_l_h) ? x[4] + x[10] : x[4];
+    auto armor_z = (use_l_h) ? x[4] + x[10] : x[4];
+  if (armor_num_ == 4) {
+    if (id == 0) armor_z += h_pair_a_;
+    else if (id == 2) armor_z -= h_pair_a_;
+    else if (id == 1) armor_z += h_pair_b_;
+    else if (id == 3) armor_z -= h_pair_b_;
+  }
 
   return {armor_x, armor_y, armor_z};
 }

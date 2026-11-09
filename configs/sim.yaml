@@ -54,16 +54,17 @@ max_rectangular_error: 25 # degree
 min_detect_count: 5
 max_temp_lost_count: 15
 outpost_max_temp_lost_count: 75
+# 过程噪声：加速度方差 m^2/s^4、角加速度方差 rad^2/s^4，改动后 R 需重新标定
 q_accel_xy: 12
 q_accel_z: 24
-q_accel_z_spin_w0: 3.0
-q_accel_z_spin_scale: 2.0
 q_accel_w: 5
-q_accel_w_alpha0: 1.0
-q_accel_w_alpha_scale: 0.6
-q_accel_w_max_gain: 4
-R_pitch: 2.7e-5
-R_yaw: 1.5e-4
+# 量测噪声 rad^2
+ekf_R_pitch: 2.7e-5  # 等效仰角 sd 0.30°
+ekf_R_yaw: 1.5e-4    # 等效方位 sd 0.70°
+# 0 关闭
+height_table_gain: 0.1
+# 单位 σ，0 关闭
+ekf_huber_k: 3.0
 
 #####-----打符参数（只在 buff 模式读）-----#####
 model: "assets/yolo11_buff_int8.xml"

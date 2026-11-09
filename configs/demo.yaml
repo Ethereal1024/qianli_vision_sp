@@ -38,6 +38,13 @@ min_detect_count: 5
 max_temp_lost_count: 15
 outpost_max_temp_lost_count: 75
 
+# 以下为代码缺省值，显式写出便于对照
+q_accel_xy: 100   # m^2/s^4
+q_accel_z: 100
+q_accel_w: 400    # rad^2/s^4
+ekf_R_yaw: 4e-3   # rad^2（≈3.6°）
+ekf_R_pitch: 4e-3
+
 #####-----aimer参数-----#####
 yaw_offset: -1 # degree -2.5
 pitch_offset: -1.4 # degree 2
