@@ -2,6 +2,8 @@
 #define AUTO_AIM__MT_DETECTOR_HPP
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <opencv2/opencv.hpp>
 #include <tuple>
 
@@ -32,9 +34,13 @@ private:
   Backend backend_;
   YOLO yolo_;
 
+  // 队列深度 1：深度增大后满则丢新帧，排队延迟无界，云台会按更早的画面瞄准；
+  // 代价是生产端需等待消费者取走上一帧
+  std::mutex slot_mtx_;
+  std::condition_variable slot_cv_;
   tools::ThreadSafeQueue<
     std::tuple<cv::Mat, std::chrono::steady_clock::time_point, std::unique_ptr<BackendCtx>>>
-    queue_{16, [] { tools::logger()->debug("[MultiThreadDetector] queue is full!"); }};
+    queue_{1, [] { tools::logger()->debug("[MultiThreadDetector] queue is full, dropping frame"); }};
 };
 
 }  // namespace multithread

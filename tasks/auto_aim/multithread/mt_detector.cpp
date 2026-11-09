@@ -2,6 +2,9 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <condition_variable>
+#include <mutex>
+
 namespace auto_aim
 {
 namespace multithread
@@ -25,6 +28,15 @@ MultiThreadDetector::MultiThreadDetector(const std::string & config_path, bool d
 
 void MultiThreadDetector::push(cv::Mat img, std::chrono::steady_clock::time_point t)
 {
+  // 消费者 100 ms 未取时丢弃待处理帧，否则 push 会一直阻塞、退出时无法 join
+  {
+    std::unique_lock<std::mutex> lock(slot_mtx_);
+    if (!slot_cv_.wait_for(lock, std::chrono::milliseconds(100), [this] { return queue_.empty(); })) {
+      auto stale = queue_.pop();
+      (void)stale;
+    }
+  }
+
   auto ctx = backend_.create_ctx();
   backend_.execute_async(img, ctx.get());
   queue_.push({img.clone(), t, std::move(ctx)});
@@ -33,6 +45,7 @@ void MultiThreadDetector::push(cv::Mat img, std::chrono::steady_clock::time_poin
 std::tuple<std::list<Armor>, std::chrono::steady_clock::time_point> MultiThreadDetector::pop()
 {
   auto [img, t, ctx] = queue_.pop();
+  slot_cv_.notify_one();
 
   cv::Mat output;
   backend_.wait_for_result(output, ctx.get());
@@ -45,6 +58,7 @@ std::tuple<cv::Mat, std::list<Armor>, std::chrono::steady_clock::time_point>
 MultiThreadDetector::debug_pop()
 {
   auto [img, t, ctx] = queue_.pop();
+  slot_cv_.notify_one();
 
   cv::Mat output;
   backend_.wait_for_result(output, ctx.get());

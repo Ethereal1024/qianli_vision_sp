@@ -10,6 +10,10 @@ sim_shm:
 #####-----运行参数-----#####
 print_hz: 1.0
 use_shooter: true
+# 仿真对照实验用：标定参数取自仿真目标形状，不适用于真机
+detect_thread: async  # async 在独立线程检测（真机流程），sync 在主循环内串行
+command_hz: 500       # >0 按此频率重发指令（真机 CAN 500 Hz），0 每帧一次
+diag: false           # 逐帧输出 [diag] 33 列，也可用环境变量 DIAG=1 开启
 
 #####-----敌方颜色-----#####
 enemy_color: "blue"
@@ -59,6 +63,12 @@ q_accel_w_alpha_scale: 0.6
 q_accel_w_max_gain: 4
 R_pitch: 2.7e-5
 R_yaw: 1.5e-4
+
+#####-----打符参数（只在 buff 模式读）-----#####
+model: "assets/yolo11_buff_int8.xml"
+fire_thresh: 0.0035
+fire_gap_time: 0.700   # s
+predict_time: 0.120    # s
 
 #####-----aimer参数-----#####
 yaw_offset: 0
