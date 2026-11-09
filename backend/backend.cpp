@@ -50,8 +50,8 @@ bool BackendBase::execute(const cv::Mat & img, cv::Mat & target, BackendCtx * ct
 void BackendBase::execute_async(const cv::Mat & img, BackendCtx * ctx)
 {
   cv::Mat input;
-  standarlize(img, input, ctx->scale);
-  infer_async(img, ctx);
+  if (!standarlize(img, input, ctx->scale)) return;
+  infer_async(input, ctx);
 }
 
 Backend::Backend(const std::string config_path) { backend_allocate(config_path); }
@@ -119,7 +119,7 @@ void Backend::backend_allocate(const std::string config_path)
     return;
   }
 #endif
-  tools::logger()->error("未知的后端类型：{}", backend_type);
+  tools::logger()->error("[Backend] unknown backend type: {}", backend_type);
   backend_ = nullptr;
 }
 

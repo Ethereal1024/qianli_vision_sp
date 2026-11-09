@@ -187,9 +187,16 @@ void TensorRTBackend::infer_async(const cv::Mat & input, BackendCtx * ctx)
     stream_);
   ex_ctx_->enqueueV3(stream_);
 
+  const auto output_type = engine_->getTensorDataType(output_name_.c_str());
+  void * host_out = output_type == nvinfer1::DataType::kHALF
+                      ? static_cast<void *>(trt_ctx->host_output_half_.data())
+                      : static_cast<void *>(trt_ctx->host_output_.data());
+  if (host_out == nullptr) {
+    tools::logger()->error("TensorRT host output buffer is empty");
+    return;
+  }
   cudaMemcpyAsync(
-    trt_ctx->host_output_.data(), trt_ctx->output_device_, trt_ctx->output_bytes_,
-    cudaMemcpyDeviceToHost, stream_);
+    host_out, trt_ctx->output_device_, trt_ctx->output_bytes_, cudaMemcpyDeviceToHost, stream_);
 }
 
 void TensorRTBackend::wait_for_result(cv::Mat & output, BackendCtx * ctx)
@@ -199,8 +206,31 @@ void TensorRTBackend::wait_for_result(cv::Mat & output, BackendCtx * ctx)
   cudaStreamSynchronize(stream_);
 
   auto output_dims = ex_ctx_->getTensorShape(output_name_.c_str());
-  int rows = output_dims.d[output_dims.nbDims - 2];
-  int cols = output_dims.d[output_dims.nbDims - 1];
+  auto output_type = engine_->getTensorDataType(output_name_.c_str());
+  if (output_dims.nbDims < 2) {
+    tools::logger()->error("Unexpected TensorRT output dimensions");
+    output = cv::Mat();
+    return;
+  }
+
+  const size_t count = tensor_bytes(output_dims, output_type) / element_size(output_type);
+  if (output_type == nvinfer1::DataType::kHALF) {
+    if (trt_ctx->host_output_half_.size() < count) {
+      tools::logger()->error("TensorRT host output buffer is too small (half)");
+      output = cv::Mat();
+      return;
+    }
+    trt_ctx->host_output_.resize(count);
+    for (size_t i = 0; i < count; ++i)
+      trt_ctx->host_output_[i] = __half2float(trt_ctx->host_output_half_[i]);
+  } else if (trt_ctx->host_output_.size() < count) {
+    tools::logger()->error("TensorRT host output buffer is too small (float)");
+    output = cv::Mat();
+    return;
+  }
+
+  const int rows = output_dims.d[output_dims.nbDims - 2];
+  const int cols = output_dims.d[output_dims.nbDims - 1];
   output = cv::Mat(rows, cols, CV_32F, trt_ctx->host_output_.data());
 }
 
@@ -357,11 +387,31 @@ bool TensorRTBackend::ensure_context_ready(TensorRTCtx & ctx)
     tools::logger()->error("Failed to bind TensorRT tensors");
     return false;
   }
+
+  const size_t count = output_bytes / element_size(output_type);
+  if (output_type == nvinfer1::DataType::kHALF) {
+    if (ctx.host_output_half_.size() != count) ctx.host_output_half_.resize(count);
+  } else if (output_type == nvinfer1::DataType::kFLOAT) {
+    if (ctx.host_output_.size() != count) ctx.host_output_.resize(count);
+  } else {
+    tools::logger()->error("Unsupported TensorRT output type");
+    return false;
+  }
   return true;
 }
 
 bool TensorRTBackend::prepare_input(const cv::Mat & input, std::vector<float> & host_input) const
 {
+  if (
+    input.rows != model_config_.input_size.height || input.cols != model_config_.input_size.width ||
+    input.channels() != model_config_.input_channels) {
+    tools::logger()->error(
+      "TensorRT input is {}x{}x{}, expected {}x{}x{}", input.cols, input.rows, input.channels(),
+      model_config_.input_size.width, model_config_.input_size.height,
+      model_config_.input_channels);
+    return false;
+  }
+
   cv::Mat float_input;
   double scale = model_config_.preprocess ? 1.0 / 255.0 : 1.0;
   input.convertTo(float_input, CV_32F, scale);
