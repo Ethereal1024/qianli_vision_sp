@@ -23,10 +23,6 @@ Aimer::Aimer(const std::string & config_path)
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
   low_speed_delay_time_ = yaml["low_speed_delay_time"].as<double>();
   decision_speed_ = yaml["decision_speed"].as<double>();
-  if (yaml["wait_plate_speed"])
-    wait_plate_speed_ = std::max(0.0, yaml["wait_plate_speed"].as<double>());
-  if (yaml["wait_plate_tolerance"])
-    wait_plate_tol_ = std::max(0.0, yaml["wait_plate_tolerance"].as<double>()) / 57.3;
   if (yaml["left_yaw_offset"].IsDefined() && yaml["right_yaw_offset"].IsDefined()) {
     left_yaw_offset_ = yaml["left_yaw_offset"].as<double>() / 57.3;    // degree to rad
     right_yaw_offset_ = yaml["right_yaw_offset"].as<double>() / 57.3;  // degree to rad
@@ -38,16 +34,9 @@ io::Command Aimer::aim(
   std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
-  if (targets.empty()) {
-    wait_plate_active_ = false;
-    return {false, false, 0, 0};
-  }
+  if (targets.empty()) return {false, false, 0, 0};
   auto target = targets.front();
 
-  const double w_abs = std::abs(target.ekf_x()[7]);
-  wait_plate_active_ =
-    wait_plate_speed_ > 0 && (w_abs > wait_plate_speed_ ||
-                              (wait_plate_active_ && w_abs > 0.7 * wait_plate_speed_));
   auto ekf = target.ekf();
   double delay_time =
     target.ekf_x()[7] > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
@@ -169,20 +158,6 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     delta_angle_list.emplace_back(delta_angle);
   }
 
-  if (wait_plate_active_) {
-    int best = 0;
-    double best_delta = 1e9;
-    for (int i = 0; i < armor_num; i++) {
-      auto az = std::atan2(armor_xyza_list[i][1], armor_xyza_list[i][0]);
-      auto delta = std::abs(tools::limit_rad(az - center_yaw));
-      if (delta < best_delta) {
-        best_delta = delta;
-        best = i;
-      }
-    }
-    Eigen::Vector4d aim{ekf_x[0], ekf_x[2], armor_xyza_list[best][2], armor_xyza_list[best][3]};
-    return {true, aim, best};
-  }
   // 不考虑小陀螺
   if (std::abs(target.ekf_x()[8]) <= 2 && target.name != ArmorName::outpost) {
     // 选择在可射击范围内的装甲板

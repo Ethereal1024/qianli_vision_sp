@@ -16,6 +16,7 @@ struct AimPoint
 {
   bool valid;
   Eigen::Vector4d xyza;
+  // armor_xyza_list 中的板序号（-1 未确定）；四板在提前量时刻的方位仅差 2-3°，离线归因需要它
   int id = -1;
 };
 
@@ -23,11 +24,10 @@ class Aimer
 {
 public:
   AimPoint debug_aim_point;
+  // 提前量 h = debug_dt + debug_fly_time（前者含管道延迟与发弹延迟）
   double debug_dt = 0;
   double debug_fly_time = 0;
-  double wait_plate_speed() const { return wait_plate_speed_; }
-  double wait_plate_tolerance() const { return wait_plate_tol_; }
-  bool wait_plate_active() const { return wait_plate_active_; }
+
   explicit Aimer(const std::string & config_path);
   io::Command aim(
     std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
@@ -47,10 +47,6 @@ private:
   double high_speed_delay_time_;
   double low_speed_delay_time_;
   double decision_speed_;
-  double wait_plate_speed_ = 0;
-  double wait_plate_tol_ = 0.6 / 57.3;
-  bool wait_plate_active_ = false;
-
   AimPoint choose_aim_point(const Target & target);
 };
 

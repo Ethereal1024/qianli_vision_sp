@@ -77,22 +77,17 @@ pitch_offset: 0
 comming_angle: 60
 leaving_angle: 20
 decision_speed: 8
+# 发弹延迟(s)：仿真侧按 10 ms 的执行延迟建模
 high_speed_delay_time: 0.010
 low_speed_delay_time: 0.010
-wait_plate_speed: 6
-wait_plate_tolerance: 0.6
 
 #####-----shooter参数-----#####
 first_tolerance: 3
 second_tolerance: 2
 judge_distance: 2
 auto_fire: true
-max_vel_change: 0.35
-max_vel_change_z: 0.6
-vel_window: 0.2
-steady_release: 0.5
-block_windows: 1.0
-pitch_tolerance: 0.8
+# 俯仰跟随门限（度）：超过该值不击发，<= 0 关闭
+pitch_tolerance: 0
 
 #####-----相机 / 下位机-----#####
 camera_name: "sim"
