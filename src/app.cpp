@@ -204,7 +204,7 @@ int run(const std::string & config_path)
         if (result.has_value) command = result.command;
       } else {
         command = aimer.aim(targets, t, cboard.bullet_speed);
-        if (use_shooter) command.shoot = shooter.shoot(command, aimer, targets, ypr);
+        if (use_shooter) command.shoot = shooter.shoot(command, aimer, targets, ypr, t);
         cboard.send(command);
         result.command = command;
         result.aim_point = aimer.debug_aim_point;

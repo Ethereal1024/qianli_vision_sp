@@ -96,7 +96,8 @@ void CommandGener::generate_command()
       auto command = aimer_.aim(input->targets_, input->t, input->bullet_speed);
       if (use_shooter_) {
         if (new_input || !have_shoot_ || shoot_every_tick_)
-          last_shoot_ = shooter_.shoot(command, aimer_, input->targets_, input->gimbal_pos);
+          last_shoot_ =
+            shooter_.shoot(command, aimer_, input->targets_, input->gimbal_pos, input->t);
         command.shoot = last_shoot_;
         have_shoot_ = true;
       } else

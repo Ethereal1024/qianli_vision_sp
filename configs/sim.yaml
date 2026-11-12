@@ -87,6 +87,7 @@ first_tolerance: 3
 second_tolerance: 2
 judge_distance: 2
 auto_fire: true
+fire_lookback: 3
 # 俯仰跟随门限（度）：超过该值不击发，<= 0 关闭
 pitch_tolerance: 0
 

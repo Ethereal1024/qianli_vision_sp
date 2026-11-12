@@ -2,6 +2,7 @@
 #define AUTO_AIM__SHOOTER_HPP
 
 #include <chrono>
+#include <deque>
 #include <string>
 
 #include "io/command.hpp"
@@ -21,7 +22,15 @@ public:
     std::chrono::steady_clock::time_point t = std::chrono::steady_clock::now());
 
 private:
+  void begin_frame(std::chrono::steady_clock::time_point t);
+  const io::Command * gate_reference(const io::Command & command) const;
+
+  static constexpr std::size_t HISTORY_DEPTH = 8;
   io::Command last_command_;
+  std::deque<io::Command> cmd_history_;
+  std::chrono::steady_clock::time_point frame_t_{};
+  bool has_frame_ = false;
+  int fire_lookback_ = 1;
   double judge_distance_;
   double first_tolerance_;
   double second_tolerance_;
