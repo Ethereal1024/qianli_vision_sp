@@ -34,6 +34,7 @@ private:
   Eigen::Matrix3d R_camera2gimbal_;
   Eigen::Vector3d t_camera2gimbal_;
   Eigen::Matrix3d R_gimbal2world_;
+  bool q_inverted_ = false;
 
   void optimize_yaw(Armor & armor) const;
 

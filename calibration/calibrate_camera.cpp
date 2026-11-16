@@ -108,6 +108,11 @@ int main(int argc, char * argv[])
   std::vector<std::vector<cv::Point2f>> img_points;
   load(input_folder, config_path, img_size, obj_points, img_points);
 
+  if (obj_points.empty()) {
+    tools::logger()->error("[calibration_camera] Camera calibration has no valid checkerboard samples in {}", input_folder);
+    return 1;
+  }
+
   // 相机标定
   cv::Mat camera_matrix, distort_coeffs;
   std::vector<cv::Mat> rvecs, tvecs;

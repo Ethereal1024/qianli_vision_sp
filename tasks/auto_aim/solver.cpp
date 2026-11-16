@@ -6,6 +6,7 @@
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/yaml.hpp"
 
 namespace auto_aim
 {
@@ -27,6 +28,7 @@ const std::vector<cv::Point3f> SMALL_ARMOR_POINTS{
 Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3d::Identity())
 {
   auto yaml = YAML::LoadFile(config_path);
+  q_inverted_ = tools::read(yaml, "q_inverted", false);
 
   auto R_gimbal2imubody_data = yaml["R_gimbal2imubody"].as<std::vector<double>>();
   auto R_camera2gimbal_data = yaml["R_camera2gimbal"].as<std::vector<double>>();
@@ -48,6 +50,7 @@ Eigen::Matrix3d Solver::R_gimbal2world() const { return R_gimbal2world_; }
 void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
 {
   Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
+  if (q_inverted_) R_imubody2imuabs.transposeInPlace();
   R_gimbal2world_ = R_gimbal2imubody_.transpose() * R_imubody2imuabs * R_gimbal2imubody_;
 }
 
