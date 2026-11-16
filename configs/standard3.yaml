@@ -18,14 +18,14 @@ pipeline:
     model_path: assets/armor_v5n_fp16.xml
     mode: sync
     capacity: 16
-    worker: 1
+    worker: 4
     openvino:
       device: GPU
 min_confidence: 0.8
 use_traditional: true
 
 #####-----ROI-----#####
-roi: 
+roi:
   x: 420
   y: 50
   width: 600
