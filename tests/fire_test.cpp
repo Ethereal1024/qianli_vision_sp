@@ -1,6 +1,6 @@
 #include <fmt/format.h>
 
-#include "io/gimbal/gimbal.hpp"
+#include "io/gimbal.hpp"
 #include "tools/exiter.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"

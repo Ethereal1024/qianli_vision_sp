@@ -13,12 +13,12 @@ USBCamera::USBCamera(const std::string & open_name, const std::string & config_p
 : open_name_(open_name), quit_(false), ok_(false), queue_(1), open_count_(0)
 {
   auto yaml = tools::load(config_path);
-  image_width_ = tools::read<double>(yaml, "image_width");
-  image_height_ = tools::read<double>(yaml, "image_height");
-  usb_exposure_ = tools::read<double>(yaml, "usb_exposure");
-  usb_frame_rate_ = tools::read<double>(yaml, "usb_frame_rate");
-  usb_gamma_ = tools::read<double>(yaml, "usb_gamma");
-  usb_gain_ = tools::read<double>(yaml, "usb_gain");
+  image_width_ = tools::read<double>(yaml, "image_width", 1920.0);
+  image_height_ = tools::read<double>(yaml, "image_height", 1080.0);
+  usb_exposure_ = tools::read<double>(yaml, "usb_exposure", 250.0);
+  usb_frame_rate_ = tools::read<double>(yaml, "usb_frame_rate", 60.0);
+  usb_gamma_ = tools::read<double>(yaml, "usb_gamma", 160.0);
+  usb_gain_ = tools::read<double>(yaml, "usb_gain", 10.0);
   try_open();
 
   // 守护线程

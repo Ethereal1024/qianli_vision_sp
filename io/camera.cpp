@@ -11,18 +11,18 @@ namespace io
 Camera::Camera(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
-  auto camera_name = tools::read<std::string>(yaml, "camera_name");
-  auto exposure_ms = tools::read<double>(yaml, "exposure_ms");
+  auto camera_name = tools::read<std::string>(yaml, "camera_name", "hikrobot");
+  auto exposure_ms = tools::read<double>(yaml, "exposure_ms", 2.0);
 
   if (camera_name == "mindvision") {
-    auto gamma = tools::read<double>(yaml, "gamma");
-    auto vid_pid = tools::read<std::string>(yaml, "vid_pid");
+    auto gamma = tools::read<double>(yaml, "gamma", 0.5);
+    auto vid_pid = tools::read<std::string>(yaml, "vid_pid", "f622:d13a");
     camera_ = std::make_unique<MindVision>(exposure_ms, gamma, vid_pid);
   }
 
   else if (camera_name == "hikrobot") {
-    auto gain = tools::read<double>(yaml, "gain");
-    auto vid_pid = tools::read<std::string>(yaml, "vid_pid");
+    auto gain = tools::read<double>(yaml, "gain", 16.0);
+    auto vid_pid = tools::read<std::string>(yaml, "vid_pid", "2bdf:0001");
     camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid);
   }
 

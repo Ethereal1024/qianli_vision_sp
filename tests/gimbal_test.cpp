@@ -1,4 +1,4 @@
-#include "io/gimbal/gimbal.hpp"
+#include "io/gimbal.hpp"
 
 #include <chrono>
 #include <opencv2/opencv.hpp>

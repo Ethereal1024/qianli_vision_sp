@@ -1,5 +1,8 @@
 #include "gimbal.hpp"
 
+#include <array>
+#include <cstring>
+
 #include "tools/crc.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -10,11 +13,21 @@ namespace io
 Gimbal::Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
-  auto com_port = tools::read<std::string>(yaml, "com_port");
+  auto com_port = tools::read<std::string>(yaml, "com_port", "/dev/ttyACM0");
+  auto baudrate = tools::read<uint32_t>(yaml, "baudrate", 921600);
 
   try {
     serial_.setPort(com_port);
+    serial_.setBaudrate(baudrate);
+    serial_.setFlowcontrol(serial::flowcontrol_none);
+    serial_.setParity(serial::parity_none);
+    serial_.setStopbits(serial::stopbits_one);
+    serial_.setBytesize(serial::eightbits);
+    auto timeout = serial::Timeout::simpleTimeout(20);
+    serial_.setTimeout(timeout);
     serial_.open();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    serial_.flushInput();
   } catch (const std::exception & e) {
     tools::logger()->error("[Gimbal] Failed to open serial: {}", e.what());
     exit(1);
@@ -117,13 +130,14 @@ void Gimbal::send(
   }
 }
 
-bool Gimbal::read(uint8_t * buffer, size_t size)
+size_t Gimbal::read(uint8_t * buffer, size_t size)
 {
   try {
-    return serial_.read(buffer, size) == size;
+    // The serial library waits for the requested bytes up to its configured timeout.
+    return serial_.read(buffer, size);
   } catch (const std::exception & e) {
-    // tools::logger()->warn("[Gimbal] Failed to read serial: {}", e.what());
-    return false;
+    tools::logger()->debug("[Gimbal] Failed to read serial: {}", e.what());
+    return 0;
   }
 }
 
@@ -131,36 +145,77 @@ void Gimbal::read_thread()
 {
   tools::logger()->info("[Gimbal] read_thread started.");
   int error_count = 0;
+  int header_read_fail = 0;
+  int body_read_fail = 0;
+  int bad_header = 0;
+  int crc_fail = 0;
+  std::array<uint8_t, sizeof(GimbalToVision)> buffer{};
+  size_t buffered = 0;
+  bool header_found = false;
+  std::chrono::steady_clock::time_point t;
+
+  auto discard_byte = [&] {
+    --buffered;
+    std::memmove(buffer.data(), buffer.data() + 1, buffered);
+    header_found = false;
+  };
 
   while (!quit_) {
     if (error_count > 5000) {
       error_count = 0;
-      tools::logger()->warn("[Gimbal] Too many errors, attempting to reconnect...");
+      tools::logger()->warn(
+        "[Gimbal] Too many errors, attempting to reconnect... "
+        "(header_read_fail={}, body_read_fail={}, bad_header={}, crc_fail={})",
+        header_read_fail, body_read_fail, bad_header, crc_fail);
+      header_read_fail = 0;
+      body_read_fail = 0;
+      bad_header = 0;
+      crc_fail = 0;
+      buffered = 0;
+      header_found = false;
       reconnect();
       continue;
     }
 
-    if (!read(reinterpret_cast<uint8_t *>(&rx_data_), sizeof(rx_data_.head))) {
-      error_count++;
+    const auto required = header_found ? buffer.size() : sizeof(rx_data_.head);
+    if (buffered < required) {
+      auto n = read(buffer.data() + buffered, required - buffered);
+      buffered += n;
+      if (n == 0) {
+        ++error_count;
+        if (header_found) ++body_read_fail;
+        else ++header_read_fail;
+      }
+      // Keep partial data even when a read times out; it is not a frame boundary.
+      if (buffered < required) continue;
+    }
+
+    if (!header_found) {
+      if (buffer[0] != 'S' || buffer[1] != 'P') {
+        ++error_count;
+        ++bad_header;
+        tools::logger()->debug(
+          "[Gimbal] Invalid frame header: 0x{:02X} 0x{:02X}", buffer[0], buffer[1]);
+        discard_byte();
+        continue;
+      }
+      t = std::chrono::steady_clock::now();
+      header_found = true;
       continue;
     }
 
-    if (rx_data_.head[0] != 'S' || rx_data_.head[1] != 'P') continue;
-
-    auto t = std::chrono::steady_clock::now();
-
-    if (!read(
-          reinterpret_cast<uint8_t *>(&rx_data_) + sizeof(rx_data_.head),
-          sizeof(rx_data_) - sizeof(rx_data_.head))) {
-      error_count++;
-      continue;
-    }
-
-    if (!tools::check_crc16(reinterpret_cast<uint8_t *>(&rx_data_), sizeof(rx_data_))) {
+    if (!tools::check_crc16(buffer.data(), buffer.size())) {
+      ++error_count;
+      ++crc_fail;
       tools::logger()->debug("[Gimbal] CRC16 check failed.");
+      // A damaged frame can contain the start of the next valid frame.
+      discard_byte();
       continue;
     }
 
+    std::memcpy(&rx_data_, buffer.data(), sizeof(rx_data_));
+    buffered = 0;
+    header_found = false;
     error_count = 0;
     Eigen::Quaterniond q(rx_data_.q[0], rx_data_.q[1], rx_data_.q[2], rx_data_.q[3]);
     queue_.push({q, t});
@@ -210,6 +265,8 @@ void Gimbal::reconnect()
 
     try {
       serial_.open();  // 尝试重新打开
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      serial_.flushInput();
       queue_.clear();
       tools::logger()->info("[Gimbal] Reconnected serial successfully.");
       break;

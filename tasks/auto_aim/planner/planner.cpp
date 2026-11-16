@@ -13,12 +13,12 @@ namespace auto_aim
 Planner::Planner(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
-  yaw_offset_ = tools::read<double>(yaml, "yaw_offset") / 57.3;
-  pitch_offset_ = tools::read<double>(yaml, "pitch_offset") / 57.3;
-  fire_thresh_ = tools::read<double>(yaml, "fire_thresh");
-  decision_speed_ = tools::read<double>(yaml, "decision_speed");
-  high_speed_delay_time_ = tools::read<double>(yaml, "high_speed_delay_time");
-  low_speed_delay_time_ = tools::read<double>(yaml, "low_speed_delay_time");
+  yaw_offset_ = tools::read<double>(yaml, "yaw_offset", 0.0) / 57.3;
+  pitch_offset_ = tools::read<double>(yaml, "pitch_offset", 0.0) / 57.3;
+  fire_thresh_ = tools::read<double>(yaml, "fire_thresh", 0.003);
+  decision_speed_ = tools::read<double>(yaml, "decision_speed", 8.0);
+  high_speed_delay_time_ = tools::read<double>(yaml, "high_speed_delay_time", 0.030);
+  low_speed_delay_time_ = tools::read<double>(yaml, "low_speed_delay_time", 0.015);
 
   setup_yaw_solver(config_path);
   setup_pitch_solver(config_path);
@@ -110,9 +110,9 @@ Plan Planner::plan(std::optional<Target> target, double bullet_speed)
 void Planner::setup_yaw_solver(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
-  auto max_yaw_acc = tools::read<double>(yaml, "max_yaw_acc");
-  auto Q_yaw = tools::read<std::vector<double>>(yaml, "Q_yaw");
-  auto R_yaw = tools::read<std::vector<double>>(yaml, "R_yaw");
+  auto max_yaw_acc = tools::read<double>(yaml, "max_yaw_acc", 50.0);
+  auto Q_yaw = tools::read<std::vector<double>>(yaml, "Q_yaw", {9e6, 0.0});
+  auto R_yaw = tools::read<std::vector<double>>(yaml, "R_yaw", {1.0});
 
   Eigen::MatrixXd A{{1, DT}, {0, 1}};
   Eigen::MatrixXd B{{0}, {DT}};
@@ -133,9 +133,9 @@ void Planner::setup_yaw_solver(const std::string & config_path)
 void Planner::setup_pitch_solver(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
-  auto max_pitch_acc = tools::read<double>(yaml, "max_pitch_acc");
-  auto Q_pitch = tools::read<std::vector<double>>(yaml, "Q_pitch");
-  auto R_pitch = tools::read<std::vector<double>>(yaml, "R_pitch");
+  auto max_pitch_acc = tools::read<double>(yaml, "max_pitch_acc", 100.0);
+  auto Q_pitch = tools::read<std::vector<double>>(yaml, "Q_pitch", {9e6, 0.0});
+  auto R_pitch = tools::read<std::vector<double>>(yaml, "R_pitch", {1.0});
 
   Eigen::MatrixXd A{{1, DT}, {0, 1}};
   Eigen::MatrixXd B{{0}, {DT}};

@@ -96,7 +96,7 @@ private:
   tools::ThreadSafeQueue<std::tuple<Eigen::Quaterniond, std::chrono::steady_clock::time_point>>
     queue_{1000};
 
-  bool read(uint8_t * buffer, size_t size);
+  size_t read(uint8_t * buffer, size_t size);
   void read_thread();
   void reconnect();
 };

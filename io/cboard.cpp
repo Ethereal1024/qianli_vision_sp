@@ -107,9 +107,9 @@ std::string CBoard::read_yaml(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
 
-  quaternion_canid_ = tools::read<int>(yaml, "quaternion_canid");
-  bullet_speed_canid_ = tools::read<int>(yaml, "bullet_speed_canid");
-  send_canid_ = tools::read<int>(yaml, "send_canid");
+  quaternion_canid_ = tools::read<int>(yaml, "quaternion_canid", 0x100);
+  bullet_speed_canid_ = tools::read<int>(yaml, "bullet_speed_canid", 0x101);
+  send_canid_ = tools::read<int>(yaml, "send_canid", 0xff);
 
   if (!yaml["can_interface"]) {
     throw std::runtime_error("Missing 'can_interface' in YAML configuration.");
