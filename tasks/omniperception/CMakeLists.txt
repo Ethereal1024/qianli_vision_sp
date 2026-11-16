@@ -4,4 +4,4 @@ add_library(omniperception OBJECT
     decider.cpp
     perceptron.cpp
 )
-target_link_libraries(omniperception)
+target_link_libraries(omniperception auto_aim)

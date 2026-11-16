@@ -29,7 +29,9 @@ inline T read(const YAML::Node & yaml, const std::string & key)
 template <typename T>
 inline T read(const YAML::Node & yaml, const std::string & key, T default_value)
 {
-  if (yaml[key]) return yaml[key].as<T>();
+  if (!yaml || yaml.IsNull()) return default_value;
+  const auto value = yaml[key];
+  if (value && !value.IsNull()) return value.as<T>();
   return default_value;
 }
 

@@ -37,10 +37,7 @@ cv::Point2f Buff_Detector::get_r_center(std::vector<FanBlade> & fanblades, cv::M
 
   cv::Point2f r_center_t = {0, 0};
   for (auto & fanblade : fanblades) {
-    auto point5 = fanblade.points[4];  // point5是扇叶的中心
-    auto point6 = fanblade.points[5];
-    r_center_t += (point6 - point5) * 1.4 + point5;  // TODO
-    // r_center_t += 4.7 * point - (4.7 - 1) * fanblade.center;
+    r_center_t += fanblade.points[5];  // 新模型直接给出R标中心，不再从扇叶尾端外推。
   }
   r_center_t /= float(fanblades.size());
 
@@ -102,7 +99,14 @@ std::optional<PowerRune> Buff_Detector::detect_24(cv::Mat & bgr_img)
   /// results转扇叶FanBlade
 
   std::vector<FanBlade> fanblades;
-  for (auto & result : results) fanblades.emplace_back(FanBlade(result.kpt, result.kpt[4], _light));
+  for (auto & result : results) {
+    fanblades.emplace_back(
+      FanBlade(result.kpt, result.kpt[4], result.label == 0 ? _target : _light));
+  }
+  if (std::none_of(results.begin(), results.end(), [](const auto & result) { return result.label == 0; })) {
+    handle_lose();
+    return std::nullopt;
+  }
 
   /// 生成PowerRune
   auto r_center = get_r_center(fanblades, bgr_img);
@@ -139,7 +143,7 @@ std::optional<PowerRune> Buff_Detector::detect(cv::Mat & bgr_img)
 
   std::vector<FanBlade> fanblades;
   auto result = results[0];
-  fanblades.emplace_back(FanBlade(result.kpt, result.kpt[4], _light));
+  fanblades.emplace_back(FanBlade(result.kpt, result.kpt[4], _target));
 
   /// 生成PowerRune
   auto r_center = get_r_center(fanblades, bgr_img);
@@ -172,8 +176,10 @@ std::optional<PowerRune> Buff_Detector::detect_debug(cv::Mat & bgr_img, cv::Poin
   /// results转扇叶FanBlade
 
   std::vector<FanBlade> fanblades_t;
-  for (auto & result : results)
-    fanblades_t.emplace_back(FanBlade(result.kpt, result.kpt[4], _light));
+  for (auto & result : results) {
+    if (result.label == 0) fanblades_t.emplace_back(FanBlade(result.kpt, result.kpt[4], _target));
+  }
+  if (fanblades_t.empty()) return std::nullopt;
 
   /// 计算r_center,筛选fanblade
   auto r_center = get_r_center(fanblades_t, bgr_img);
