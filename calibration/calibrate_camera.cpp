@@ -1,10 +1,8 @@
 #include <fmt/core.h>
-#include <yaml-cpp/yaml.h>
 
-#include <fstream>
 #include <opencv2/opencv.hpp>
 
-#include "tools/img_tools.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
@@ -28,11 +26,11 @@ void load(
   std::vector<std::vector<cv::Point2f>> & img_points)
 {
   // 读取yaml参数
-  auto yaml = YAML::LoadFile(config_path);
-  auto pattern_cols = yaml["pattern_cols"].as<int>();
-  auto pattern_rows = yaml["pattern_rows"].as<int>();
-  auto center_distance_mm = yaml["center_distance_mm"].as<double>();
-  cv::Size pattern_size(pattern_cols, pattern_rows);
+  auto yaml = tools::load(config_path);
+  auto pattern_cols = tools::read(yaml, "pattern_cols", 11);
+  auto pattern_rows = tools::read(yaml, "pattern_rows", 8);
+  auto center_distance_mm = tools::read(yaml, "center_distance_mm", 15.0);
+  cv::Size pattern_size(pattern_rows, pattern_cols);
 
   for (int i = 1; true; i++) {
     // 读取图片
@@ -43,9 +41,18 @@ void load(
     // 设置图片尺寸
     img_size = img.size();
 
-    // 识别标定板
+    // 识别标定板（棋盘格角点）
     std::vector<cv::Point2f> centers_2d;
-    auto success = cv::findCirclesGrid(img, pattern_size, centers_2d, cv::CALIB_CB_SYMMETRIC_GRID);
+    auto success = cv::findChessboardCorners(
+      img, pattern_size, centers_2d,
+      cv::CALIB_CB_ADAPTIVE_THRESH + cv::CALIB_CB_NORMALIZE_IMAGE);
+    if (success) {
+      cv::Mat gray;
+      cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+      cv::cornerSubPix(
+        gray, centers_2d, cv::Size(11, 11), cv::Size(-1, -1),
+        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1));
+    }
 
     // 显示识别结果
     auto drawing = img.clone();

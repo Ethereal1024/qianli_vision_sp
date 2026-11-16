@@ -21,6 +21,12 @@ inline YAML::Node load(const std::string & path)
 }
 
 template <typename T>
+inline T read(const YAML::Node & yaml, const std::string & key)
+{
+  return yaml[key].as<T>();
+}
+
+template <typename T>
 inline T read(const YAML::Node & yaml, const std::string & key, T default_value)
 {
   if (yaml[key]) return yaml[key].as<T>();

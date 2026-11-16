@@ -1,5 +1,4 @@
 #include <fmt/core.h>
-#include <yaml-cpp/yaml.h>
 
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <fstream>
@@ -8,6 +7,7 @@
 
 #include "tools/img_tools.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
@@ -40,13 +40,14 @@ void load(
   std::vector<cv::Mat> & tvecs)
 {
   // 读取yaml参数
-  auto yaml = YAML::LoadFile(config_path);
-  auto pattern_cols = yaml["pattern_cols"].as<int>();
-  auto pattern_rows = yaml["pattern_rows"].as<int>();
-  auto center_distance_mm = yaml["center_distance_mm"].as<double>();
-  R_gimbal2imubody_data = yaml["R_gimbal2imubody"].as<std::vector<double>>();
-  auto camera_matrix_data = yaml["camera_matrix"].as<std::vector<double>>();
-  auto distort_coeffs_data = yaml["distort_coeffs"].as<std::vector<double>>();
+  auto yaml = tools::load(config_path);
+  auto pattern_cols = tools::read(yaml, "pattern_cols", 11);
+  auto pattern_rows = tools::read(yaml, "pattern_rows", 8);
+  auto center_distance_mm = tools::read(yaml, "center_distance_mm", 15.0);
+  R_gimbal2imubody_data = tools::read<std::vector<double>>(yaml, "R_gimbal2imubody");
+  auto camera_matrix_data = tools::read<std::vector<double>>(yaml, "camera_matrix");
+  auto distort_coeffs_data = tools::read<std::vector<double>>(yaml, "distort_coeffs");
+  auto q_inverted = tools::read(yaml, "q_inverted", false);
 
   cv::Size pattern_size(pattern_cols, pattern_rows);
   Eigen::Matrix<double, 3, 3, Eigen::RowMajor> R_gimbal2imubody(R_gimbal2imubody_data.data());
@@ -63,6 +64,9 @@ void load(
 
     // 计算云台的欧拉角
     Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
+    if (q_inverted) {
+      R_imubody2imuabs.transposeInPlace();
+    }
     Eigen::Matrix3d R_gimbal2world =
       R_gimbal2imubody.transpose() * R_imubody2imuabs * R_gimbal2imubody;
     Eigen::Vector3d ypr = tools::eulers(R_gimbal2world, 2, 1, 0) * 57.3;  // degree
@@ -73,9 +77,18 @@ void load(
     tools::draw_text(drawing, fmt::format("pitch {:.2f}", ypr[1]), {40, 80}, {0, 0, 255});
     tools::draw_text(drawing, fmt::format("roll  {:.2f}", ypr[2]), {40, 120}, {0, 0, 255});
 
-    // 识别标定板
+    // 识别标定板（棋盘格角点）
     std::vector<cv::Point2f> centers_2d;
-    auto success = cv::findCirclesGrid(img, pattern_size, centers_2d);  // 默认是对称圆点图案
+    auto success = cv::findChessboardCorners(
+      img, pattern_size, centers_2d,
+      cv::CALIB_CB_ADAPTIVE_THRESH + cv::CALIB_CB_NORMALIZE_IMAGE);
+    if (success) {
+      cv::Mat gray;
+      cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+      cv::cornerSubPix(
+        gray, centers_2d, cv::Size(11, 11), cv::Size(-1, -1),
+        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1));
+    }
 
     // 显示识别结果
     cv::drawChessboardCorners(drawing, pattern_size, centers_2d, success);
