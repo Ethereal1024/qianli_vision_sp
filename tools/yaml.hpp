@@ -21,11 +21,10 @@ inline YAML::Node load(const std::string & path)
 }
 
 template <typename T>
-inline T read(const YAML::Node & yaml, const std::string & key)
+inline T read(const YAML::Node & yaml, const std::string & key, T default_value)
 {
   if (yaml[key]) return yaml[key].as<T>();
-  logger()->error("[YAML] {} not found!", key);
-  exit(1);
+  return default_value;
 }
 
 }  // namespace tools
