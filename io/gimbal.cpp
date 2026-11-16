@@ -74,7 +74,7 @@ std::string Gimbal::str(GimbalMode mode) const
   }
 }
 
-Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
+Eigen::Quaterniond Gimbal::imu_at(std::chrono::steady_clock::time_point t)
 {
   while (true) {
     auto [q_a, t_a] = queue_.pop();

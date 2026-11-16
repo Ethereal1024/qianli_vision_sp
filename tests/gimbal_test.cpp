@@ -50,7 +50,7 @@ int main(int argc, char * argv[])
 
     auto t = std::chrono::steady_clock::now();
     auto state = gimbal.state();
-    auto q = gimbal.q(t);
+    auto q = gimbal.imu_at(t);
     auto ypr = tools::eulers(q, 2, 1, 0);
 
     auto fired = state.bullet_count > last_bullet_count;

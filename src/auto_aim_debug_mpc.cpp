@@ -109,7 +109,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    auto q = gimbal.q(t);
+    auto q = gimbal.imu_at(t);
 
     solver.set_R_gimbal2world(q);
     auto armors = yolo.detect(img);

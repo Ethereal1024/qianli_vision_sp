@@ -54,7 +54,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    q = gimbal.q(t);
+    q = gimbal.imu_at(t);
     auto gs = gimbal.state();
     // recorder.record(img, q, t);
 
