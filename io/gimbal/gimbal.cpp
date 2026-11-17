@@ -218,35 +218,36 @@ void Gimbal::read_thread()
     header_found = false;
     error_count = 0;
     Eigen::Quaterniond q(rx_data_.q[0], rx_data_.q[1], rx_data_.q[2], rx_data_.q[3]);
-    queue_.push({q, t});
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
 
-    std::lock_guard<std::mutex> lock(mutex_);
+      state_.yaw = rx_data_.yaw;
+      state_.yaw_vel = rx_data_.yaw_vel;
+      state_.pitch = rx_data_.pitch;
+      state_.pitch_vel = rx_data_.pitch_vel;
+      state_.bullet_speed = rx_data_.bullet_speed;
+      state_.bullet_count = rx_data_.bullet_count;
 
-    state_.yaw = rx_data_.yaw;
-    state_.yaw_vel = rx_data_.yaw_vel;
-    state_.pitch = rx_data_.pitch;
-    state_.pitch_vel = rx_data_.pitch_vel;
-    state_.bullet_speed = rx_data_.bullet_speed;
-    state_.bullet_count = rx_data_.bullet_count;
-
-    switch (rx_data_.mode) {
-      case 0:
-        mode_ = GimbalMode::IDLE;
-        break;
-      case 1:
-        mode_ = GimbalMode::AUTO_AIM;
-        break;
-      case 2:
-        mode_ = GimbalMode::SMALL_BUFF;
-        break;
-      case 3:
-        mode_ = GimbalMode::BIG_BUFF;
-        break;
-      default:
-        mode_ = GimbalMode::IDLE;
-        tools::logger()->warn("[Gimbal] Invalid mode: {}", rx_data_.mode);
-        break;
+      switch (rx_data_.mode) {
+        case 0:
+          mode_ = GimbalMode::IDLE;
+          break;
+        case 1:
+          mode_ = GimbalMode::AUTO_AIM;
+          break;
+        case 2:
+          mode_ = GimbalMode::SMALL_BUFF;
+          break;
+        case 3:
+          mode_ = GimbalMode::BIG_BUFF;
+          break;
+        default:
+          mode_ = GimbalMode::IDLE;
+          tools::logger()->warn("[Gimbal] Invalid mode: {}", rx_data_.mode);
+          break;
+      }
     }
+    queue_.push({q, t});
   }
 
   tools::logger()->info("[Gimbal] read_thread stopped.");

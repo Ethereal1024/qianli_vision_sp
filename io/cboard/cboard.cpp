@@ -6,10 +6,7 @@
 namespace io
 {
 CBoard::CBoard(const std::string & config_path)
-: mode(Mode::idle),
-  shoot_mode(ShootMode::left_shoot),
-  bullet_speed(0),
-  queue_(5000),
+: queue_(5000),
   can_(read_yaml(config_path), std::bind(&CBoard::callback, this, std::placeholders::_1))
 // 注意: callback的运行会早于Cboard构造函数的完成
 {
@@ -17,6 +14,12 @@ CBoard::CBoard(const std::string & config_path)
   queue_.pop(data_ahead_);
   queue_.pop(data_behind_);
   tools::logger()->info("[Cboard] Opened.");
+}
+
+CBoardState CBoard::state() const
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return state_;
 }
 
 Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
@@ -67,6 +70,11 @@ void CBoard::send(Command command) const
 
 void CBoard::callback(const can_frame & frame)
 {
+  if (frame.can_id != quaternion_canid_ && frame.can_id != bullet_speed_canid_) return;
+  if (frame.can_dlc != 8) {
+    tools::logger()->warn("[CBoard] Invalid frame length: {}", frame.can_dlc);
+    return;
+  }
   auto timestamp = std::chrono::steady_clock::now();
 
   if (frame.can_id == quaternion_canid_) {
@@ -84,19 +92,28 @@ void CBoard::callback(const can_frame & frame)
   }
 
   else if (frame.can_id == bullet_speed_canid_) {
-    bullet_speed = (int16_t)(frame.data[0] << 8 | frame.data[1]) / 1e2;
-    mode = Mode(frame.data[2]);
-    shoot_mode = ShootMode(frame.data[3]);
-    ft_angle = (int16_t)(frame.data[4] << 8 | frame.data[5]) / 1e4;
+    if (frame.data[2] >= MODES.size() || frame.data[3] >= SHOOT_MODES.size()) {
+      tools::logger()->warn("[CBoard] Invalid mode/shoot mode: {}/{}", frame.data[2], frame.data[3]);
+      return;
+    }
+    CBoardState received;
+    received.bullet_speed = (int16_t)(frame.data[0] << 8 | frame.data[1]) / 1e2;
+    received.mode = Mode(frame.data[2]);
+    received.shoot_mode = ShootMode(frame.data[3]);
+    received.ft_angle = (int16_t)(frame.data[4] << 8 | frame.data[5]) / 1e4;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      state_ = received;
+    }
 
     // 限制日志输出频率为1Hz
     static auto last_log_time = std::chrono::steady_clock::time_point::min();
     auto now = std::chrono::steady_clock::now();
 
-    if (bullet_speed > 0 && tools::delta_time(now, last_log_time) >= 1.0) {
+    if (received.bullet_speed > 0 && tools::delta_time(now, last_log_time) >= 1.0) {
       tools::logger()->info(
         "[CBoard] Bullet speed: {:.2f} m/s, Mode: {}, Shoot mode: {}, FT angle: {:.2f} rad",
-        bullet_speed, MODES[mode], SHOOT_MODES[shoot_mode], ft_angle);
+        received.bullet_speed, MODES[received.mode], SHOOT_MODES[received.shoot_mode], received.ft_angle);
       last_log_time = now;
     }
   }

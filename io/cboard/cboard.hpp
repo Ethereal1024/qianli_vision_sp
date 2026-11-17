@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -34,15 +35,19 @@ enum ShootMode
 };
 const std::vector<std::string> SHOOT_MODES = {"left_shoot", "right_shoot", "both_shoot"};
 
+struct CBoardState
+{
+  double bullet_speed = 0;
+  Mode mode = Mode::idle;
+  ShootMode shoot_mode = ShootMode::left_shoot;
+  double ft_angle = 0;
+};
+
 class CBoard
 {
 public:
-  double bullet_speed;
-  Mode mode;
-  ShootMode shoot_mode;
-  double ft_angle;  //无人机专有
-
   CBoard(const std::string & config_path);
+  CBoardState state() const;
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
 
@@ -55,6 +60,8 @@ private:
     std::chrono::steady_clock::time_point timestamp;
   };
 
+  mutable std::mutex state_mutex_;
+  CBoardState state_;
   tools::ThreadSafeQueue<IMUData> queue_;  // 必须在can_之前初始化，否则存在死锁的可能
   SocketCAN can_;
   IMUData data_ahead_;
