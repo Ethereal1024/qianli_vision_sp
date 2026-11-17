@@ -1,3 +1,5 @@
+mode: "cboard" # 通信模式: gimbal (串口) 或 cboard (CAN)
+
 # enemy_color: "red"
 enemy_color: "blue"
 
@@ -93,7 +95,7 @@ judge_distance: 3 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 
 #####-----decider参数-----#####
-mode: 1
+omniperception_mode: 1
 
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

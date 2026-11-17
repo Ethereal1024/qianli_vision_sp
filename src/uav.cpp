@@ -42,7 +42,7 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
 
   io::Camera camera(config_path);
-  io::CBoard cboard(config_path);
+  io::Communication communication(config_path);
 
   auto_aim::Detector detector(config_path);
   auto_aim::Solver solver(config_path);
@@ -66,8 +66,8 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    q = cboard.imu_at(t - 1ms);
-    mode = cboard.mode;
+    q = communication.imu_at(t - 1ms);
+    mode = communication.mode();
     // recorder.record(img, q, t);
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);
@@ -84,11 +84,11 @@ int main(int argc, char * argv[])
 
       auto targets = tracker.track(armors, t);
 
-      auto command = aimer.aim(targets, t, cboard.bullet_speed);
+      auto command = aimer.aim(targets, t, communication.bullet_speed());
 
       command.shoot = shooter.shoot(command, aimer, targets, ypr);
 
-      cboard.send(command);
+      communication.send(command);
     }
 
     /// 打符
@@ -103,13 +103,13 @@ int main(int argc, char * argv[])
       if (mode == io::Mode::small_buff) {
         buff_small_target.get_target(power_runes, t);
         auto target_copy = buff_small_target;
-        buff_command = buff_aimer.aim(target_copy, t, cboard.bullet_speed, true);
+        buff_command = buff_aimer.aim(target_copy, t, communication.bullet_speed(), true);
       } else if (mode == io::Mode::big_buff) {
         buff_big_target.get_target(power_runes, t);
         auto target_copy = buff_big_target;
-        buff_command = buff_aimer.aim(target_copy, t, cboard.bullet_speed, true);
+        buff_command = buff_aimer.aim(target_copy, t, communication.bullet_speed(), true);
       }
-      cboard.send(buff_command);
+      communication.send(buff_command);
     }
 
     else

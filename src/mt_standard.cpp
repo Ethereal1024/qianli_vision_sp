@@ -42,7 +42,7 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
 
   io::Camera camera(config_path);
-  io::CBoard cboard(config_path);
+  io::Communication communication(config_path);
 
   auto_aim::multithread::MultiThreadDetector detector(config_path);
   auto_aim::Solver solver(config_path);
@@ -56,7 +56,7 @@ int main(int argc, char * argv[])
   auto_buff::BigTarget buff_big_target;
   auto_buff::Aimer buff_aimer(config_path);
 
-  auto_aim::multithread::CommandGener commandgener(shooter, aimer, cboard, plotter);
+  auto_aim::multithread::CommandGener commandgener(shooter, aimer, communication, plotter);
 
   std::atomic<io::Mode> mode{io::Mode::idle};
   auto last_mode{io::Mode::idle};
@@ -75,7 +75,7 @@ int main(int argc, char * argv[])
   });
 
   while (!exiter.exit()) {
-    mode = cboard.mode;
+    mode = communication.mode();
 
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);
@@ -85,7 +85,7 @@ int main(int argc, char * argv[])
     /// 自瞄
     if (mode.load() == io::Mode::auto_aim) {
       auto [img, armors, t] = detector.debug_pop();
-      Eigen::Quaterniond q = cboard.imu_at(t - 1ms);
+      Eigen::Quaterniond q = communication.imu_at(t - 1ms);
 
       // recorder.record(img, q, t);
 
@@ -95,7 +95,7 @@ int main(int argc, char * argv[])
 
       auto targets = tracker.track(armors, t);
 
-      commandgener.push(targets, t, cboard.bullet_speed, ypr);  // 发送给决策线程
+      commandgener.push(targets, t, communication.bullet_speed(), ypr);  // 发送给决策线程
 
     }
 
@@ -106,7 +106,7 @@ int main(int argc, char * argv[])
       std::chrono::steady_clock::time_point t;
 
       camera.read(img, t);
-      q = cboard.imu_at(t - 1ms);
+      q = communication.imu_at(t - 1ms);
 
       // recorder.record(img, q, t);
 
@@ -120,13 +120,13 @@ int main(int argc, char * argv[])
       if (mode.load() == io::Mode::small_buff) {
         buff_small_target.get_target(power_runes, t);
         auto target_copy = buff_small_target;
-        buff_command = buff_aimer.aim(target_copy, t, cboard.bullet_speed, true);
+        buff_command = buff_aimer.aim(target_copy, t, communication.bullet_speed(), true);
       } else if (mode.load() == io::Mode::big_buff) {
         buff_big_target.get_target(power_runes, t);
         auto target_copy = buff_big_target;
-        buff_command = buff_aimer.aim(target_copy, t, cboard.bullet_speed, true);
+        buff_command = buff_aimer.aim(target_copy, t, communication.bullet_speed(), true);
       }
-      cboard.send(buff_command);
+      communication.send(buff_command);
 
     } else
       continue;

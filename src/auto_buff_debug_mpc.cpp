@@ -3,7 +3,7 @@
 #include <string>
 
 #include "io/camera.hpp"
-#include "io/gimbal.hpp"
+#include "io/communication.hpp"
 #include "tasks/auto_buff/buff_aimer.hpp"
 #include "tasks/auto_buff/buff_detector.hpp"
 #include "tasks/auto_buff/buff_solver.hpp"
@@ -38,7 +38,7 @@ int main(int argc, char * argv[])
   tools::Exiter exiter;
 
   // 初始化云台、相机
-  io::Gimbal gimbal(config_path);
+  io::Communication communication(config_path);
   io::Camera camera(config_path);
 
   // 初始化识别器、解算器、追踪器、瞄准器
@@ -54,8 +54,8 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    q = gimbal.imu_at(t);
-    auto gs = gimbal.state();
+    q = communication.imu_at(t);
+    auto gs = communication.state();
     // recorder.record(img, q, t);
 
     // -------------- 打符核心逻辑 --------------
@@ -72,7 +72,7 @@ int main(int argc, char * argv[])
 
     auto plan = aimer.mpc_aim(target_copy, t, gs, true);
 
-    gimbal.send(
+    communication.send(
       plan.control, plan.fire, plan.yaw, plan.yaw_vel, plan.yaw_acc, plan.pitch, plan.pitch_vel,
       plan.pitch_acc);
     // -------------- 调试输出 --------------

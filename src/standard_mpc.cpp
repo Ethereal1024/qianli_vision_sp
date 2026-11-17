@@ -41,7 +41,7 @@ int main(int argc, char * argv[])
   tools::Plotter plotter;
   tools::Recorder recorder;
 
-  io::Gimbal gimbal(config_path);
+  io::Communication communication(config_path);
   io::Camera camera(config_path);
 
   auto_aim::YOLO yolo(config_path, true);
@@ -64,20 +64,20 @@ int main(int argc, char * argv[])
 
   std::atomic<bool> quit = false;
 
-  std::atomic<io::GimbalMode> mode{io::GimbalMode::IDLE};
-  auto last_mode{io::GimbalMode::IDLE};
+  std::atomic<io::Mode> mode{io::Mode::idle};
+  auto last_mode{io::Mode::idle};
 
   auto plan_thread = std::thread([&]() {
     auto t0 = std::chrono::steady_clock::now();
     uint16_t last_bullet_count = 0;
 
     while (!quit) {
-      if (!target_queue.empty() && mode == io::GimbalMode::AUTO_AIM) {
+      if (!target_queue.empty() && mode == io::Mode::auto_aim) {
         auto target = target_queue.front();
-        auto gs = gimbal.state();
+        auto gs = communication.state();
         auto plan = planner.plan(target, gs.bullet_speed);
 
-        gimbal.send(
+        communication.send(
           plan.control, plan.fire, plan.yaw, plan.yaw_vel, plan.yaw_acc, plan.pitch, plan.pitch_vel,
           plan.pitch_acc);
 
@@ -88,21 +88,21 @@ int main(int argc, char * argv[])
   });
 
   while (!exiter.exit()) {
-    mode = gimbal.mode();
+    mode = communication.mode();
 
     if (last_mode != mode) {
-      tools::logger()->info("Switch to {}", gimbal.str(mode));
+      tools::logger()->info("Switch to {}", communication.str(mode));
       last_mode = mode.load();
     }
 
     camera.read(img, t);
-    auto q = gimbal.imu_at(t);
-    auto gs = gimbal.state();
+    auto q = communication.imu_at(t);
+    auto gs = communication.state();
     recorder.record(img, q, t);
     solver.set_R_gimbal2world(q);
 
     /// 自瞄
-    if (mode.load() == io::GimbalMode::AUTO_AIM) {
+    if (mode.load() == io::Mode::auto_aim) {
       auto armors = yolo.detect(img);
       auto targets = tracker.track(armors, t);
       if (!targets.empty())
@@ -112,7 +112,7 @@ int main(int argc, char * argv[])
     }
 
     /// 打符
-    else if (mode.load() == io::GimbalMode::SMALL_BUFF || mode.load() == io::GimbalMode::BIG_BUFF) {
+    else if (mode.load() == io::Mode::small_buff || mode.load() == io::Mode::big_buff) {
       buff_solver.set_R_gimbal2world(q);
 
       auto power_runes = buff_detector.detect(img);
@@ -120,26 +120,26 @@ int main(int argc, char * argv[])
       buff_solver.solve(power_runes);
 
       auto_aim::Plan buff_plan;
-      if (mode.load() == io::GimbalMode::SMALL_BUFF) {
+      if (mode.load() == io::Mode::small_buff) {
         buff_small_target.get_target(power_runes, t);
         auto target_copy = buff_small_target;
         buff_plan = buff_aimer.mpc_aim(target_copy, t, gs, true);
-      } else if (mode.load() == io::GimbalMode::BIG_BUFF) {
+      } else if (mode.load() == io::Mode::big_buff) {
         buff_big_target.get_target(power_runes, t);
         auto target_copy = buff_big_target;
         buff_plan = buff_aimer.mpc_aim(target_copy, t, gs, true);
       }
-      gimbal.send(
+      communication.send(
         buff_plan.control, buff_plan.fire, buff_plan.yaw, buff_plan.yaw_vel, buff_plan.yaw_acc,
         buff_plan.pitch, buff_plan.pitch_vel, buff_plan.pitch_acc);
 
     } else
-      gimbal.send(false, false, 0, 0, 0, 0, 0, 0);
+      communication.send(false, false, 0, 0, 0, 0, 0, 0);
   }
 
   quit = true;
   if (plan_thread.joinable()) plan_thread.join();
-  gimbal.send(false, false, 0, 0, 0, 0, 0, 0);
+  communication.send(false, false, 0, 0, 0, 0, 0, 0);
 
   return 0;
 }

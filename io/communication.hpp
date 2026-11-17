@@ -2,6 +2,7 @@
 #define IO__COMMUNICATION_HPP
 
 #include <optional>
+#include <mutex>
 #include <string>
 #include <variant>
 #include <Eigen/Geometry>
@@ -37,6 +38,7 @@ private:
   using Device = std::variant<Gimbal, CBoard>;
 
   std::optional<Device> device_;
+  std::mutex send_mutex_;
   void init_device(const std::string & config_path);
 };
 

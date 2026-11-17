@@ -7,6 +7,7 @@
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/yaml.hpp"
 
 namespace omniperception
 {
@@ -21,7 +22,7 @@ Decider::Decider(const std::string & config_path) : detector_(config_path), coun
   new_fov_v_ = yaml["new_fov_v"].as<double>();
   enemy_color_ =
     (yaml["enemy_color"].as<std::string>() == "red") ? auto_aim::Color::red : auto_aim::Color::blue;
-  mode_ = yaml["mode"].as<double>();
+  mode_ = tools::read(yaml, "omniperception_mode", 1);
 }
 
 io::Command Decider::decide(

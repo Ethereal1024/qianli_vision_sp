@@ -49,6 +49,7 @@ GimbalState Communication::state() const
 
 void Communication::send(Command command)
 {
+  std::lock_guard<std::mutex> lock(send_mutex_);
   if (auto * cboard = std::get_if<CBoard>(&device_.value())) {
     cboard->send(command);
   } else {
@@ -68,6 +69,7 @@ void Communication::send(
   bool control, bool fire, float yaw, float yaw_vel, float yaw_acc, float pitch,
   float pitch_vel, float pitch_acc)
 {
+  std::lock_guard<std::mutex> lock(send_mutex_);
   if (auto * gimbal = std::get_if<Gimbal>(&device_.value())) {
     gimbal->send(control, fire, yaw, yaw_vel, yaw_acc, pitch, pitch_vel, pitch_acc);
   } else {

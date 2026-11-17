@@ -1,14 +1,11 @@
 #include <fmt/core.h>
-#include <optional>
 
 #include <filesystem>
 #include <fstream>
 #include <opencv2/opencv.hpp>
-#include <variant>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
-#include "io/gimbal.hpp"
+#include "io/communication.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -18,8 +15,6 @@ const std::string keys =
   "{help h usage ?  |                          | 输出命令行参数说明}"
   "{@config-path c  | configs/calibration.yaml | yaml配置文件路径 }"
   "{output-folder o |      assets/img_with_q   | 输出文件夹路径   }";
-
-using Communication = std::variant<io::CBoard, io::Gimbal>;
 
 void write_q(const std::string q_path, const Eigen::Quaterniond & q)
 {
@@ -31,9 +26,8 @@ void write_q(const std::string q_path, const Eigen::Quaterniond & q)
 }
 
 void capture_loop(
-  const std::string & config_path, std::optional<Communication>& communication, const std::string & output_folder, const cv::Size& pattern_size)
+  const std::string & config_path, io::Communication & communication, const std::string & output_folder, const cv::Size& pattern_size)
 {
-  if (!communication.has_value()) tools::logger() -> error("[capture] Communication is empty!");
   io::Camera camera(config_path);
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
@@ -41,8 +35,7 @@ void capture_loop(
   int count = 0;
   while (true) {
     camera.read(img, timestamp);
-    Eigen::Quaterniond q = std::visit(
-      [&](auto & device) { return device.imu_at(timestamp); }, communication.value());
+    Eigen::Quaterniond q = communication.imu_at(timestamp);
 
     // 在图像上显示欧拉角，用来判断imuabs系的xyz正方向，同时判断imu是否存在零漂
     auto img_with_ypr = img.clone();
@@ -114,22 +107,7 @@ int main(int argc, char * argv[])
 
   // 按配置原地构造通信对象
   auto config = tools::load(config_path);
-  auto mode = tools::read<std::string>(config, "mode", "gimbal");
-  std::optional<Communication> communication;
-  if (mode == "gimbal") {
-    communication.emplace(std::in_place_type<io::Gimbal>, config_path);
-    tools::logger()->info("[capture] 使用云台(gimbal)串口读取IMU/姿态数据");
-  }
-
-  else if (mode == "cboard") {
-    communication.emplace(std::in_place_type<io::CBoard>, config_path);
-    tools::logger()->info("[capture] 使用CAN总线(CBoard)读取IMU数据");
-  }
-
-  else {
-    tools::logger() -> error("[capture] mode设置错误(不为gimbal或cboard)或没有设置!");
-    return 0;
-  }
+  io::Communication communication(config_path);
 
   auto pattern_cols = tools::read(config, "pattern_cols", 11); // 行数
   auto pattern_rows = tools::read(config, "pattern_rows", 8);  // 列数

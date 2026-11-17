@@ -7,7 +7,7 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/gimbal.hpp"
+#include "io/communication.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -37,7 +37,7 @@ int main(int argc, char * argv[])
     return 0;
   }
 
-  io::Gimbal gimbal(config_path);
+  io::Communication communication(config_path);
   io::Camera camera(config_path);
 
   auto_aim::YOLO yolo(config_path, true);
@@ -55,10 +55,10 @@ int main(int argc, char * argv[])
 
     while (!quit) {
       auto target = target_queue.front();
-      auto gs = gimbal.state();
+      auto gs = communication.state();
       auto plan = planner.plan(target, gs.bullet_speed);
 
-      gimbal.send(
+      communication.send(
         plan.control, plan.fire, plan.yaw, plan.yaw_vel, plan.yaw_acc, plan.pitch, plan.pitch_vel,
         plan.pitch_acc);
 
@@ -109,7 +109,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    auto q = gimbal.imu_at(t);
+    auto q = communication.imu_at(t);
 
     solver.set_R_gimbal2world(q);
     auto armors = yolo.detect(img);
@@ -144,7 +144,7 @@ int main(int argc, char * argv[])
 
   quit = true;
   if (plan_thread.joinable()) plan_thread.join();
-  gimbal.send(false, false, 0, 0, 0, 0, 0, 0);
+  communication.send(false, false, 0, 0, 0, 0, 0, 0);
 
   return 0;
 }
