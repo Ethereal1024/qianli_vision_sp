@@ -6,6 +6,7 @@
 
 #include "io/camera.hpp"
 #include "io/communication.hpp"
+#include "src/async/armor_frame_reader.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/multithread/commandgener.hpp"
 #include "tasks/auto_aim/shooter.hpp"
@@ -42,6 +43,7 @@ int main(int argc, char * argv[])
   io::Camera camera(config_path);
 
   auto_aim::YOLO detector(config_path, false);
+  ArmorFrameReader frames(camera, detector);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
@@ -55,7 +57,7 @@ int main(int argc, char * argv[])
   auto last_mode = io::Mode::idle;
 
   while (!exiter.exit()) {
-    camera.read(img, t);
+    frames.read(img, t);
     q = communication.imu_at(t - 1ms);
     mode = communication.mode();
 
@@ -70,7 +72,7 @@ int main(int argc, char * argv[])
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-    auto armors = detector.detect(img);
+    auto armors = frames.detect(img);
 
     auto targets = tracker.track(armors, t);
 
