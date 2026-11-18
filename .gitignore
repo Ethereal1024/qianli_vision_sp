@@ -16,3 +16,4 @@ records_25/
 *.clc
 .cache/
 docs/
+.zed/

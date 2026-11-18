@@ -1,4 +1,4 @@
-mode: "cboard" # 通信模式: gimbal (串口) 或 cboard (CAN)
+mode: "gimbal" # 通信模式: gimbal (串口) 或 cboard (CAN)
 
 enemy_color: "red"
 # enemy_color: "blue"
