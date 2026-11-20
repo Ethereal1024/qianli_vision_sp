@@ -16,7 +16,9 @@ namespace io
 class HikRobot : public CameraBase
 {
 public:
-  HikRobot(double exposure_ms, double gain, const std::string & vid_pid);
+  HikRobot(
+    double exposure_ms, double gain, const std::string & vid_pid, int width = 0, int height = 0,
+    float fps = 250.0f);
   ~HikRobot() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
 
@@ -29,6 +31,8 @@ private:
 
   double exposure_us_;
   double gain_;
+  int width_, height_;
+  float fps_;
 
   std::thread daemon_thread_;
   std::atomic<bool> daemon_quit_;
@@ -37,7 +41,9 @@ private:
   std::thread capture_thread_;
   std::atomic<bool> capturing_;
   std::atomic<bool> capture_quit_;
-  tools::ThreadSafeQueue<CameraData> queue_;
+  // A camera consumer needs the freshest frame. Replace a stale queued frame
+  // instead of discarding the newly captured one.
+  tools::ThreadSafeQueue<CameraData, true> queue_;
 
   int vid_, pid_;
 

@@ -23,7 +23,11 @@ Camera::Camera(const std::string & config_path)
   else if (camera_name == "hikrobot") {
     auto gain = tools::read<double>(yaml, "gain", 16.0);
     auto vid_pid = tools::read<std::string>(yaml, "vid_pid", "2bdf:0001");
-    camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid);
+    auto width = tools::read<int>(yaml, "width", 0);
+    auto height = tools::read<int>(yaml, "height", 0);
+    auto fps = tools::read<float>(yaml, "fps", 250.0f);
+    image_rotate_180_ = tools::read<bool>(yaml, "image_rotate_180", false);
+    camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid, width, height, fps);
   }
 
   else {
@@ -34,6 +38,9 @@ Camera::Camera(const std::string & config_path)
 void Camera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp)
 {
   camera_->read(img, timestamp);
+  if (image_rotate_180_ && !img.empty()) {
+    cv::rotate(img, img, cv::ROTATE_180);
+  }
 }
 
 }  // namespace io

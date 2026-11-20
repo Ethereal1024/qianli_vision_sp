@@ -7,3 +7,7 @@ camera_name: "hikrobot"
 exposure_ms: 3
 gain: 10.0
 vid_pid: "2bdf:0001"
+width: 640
+height: 480
+fps: 250
+image_rotate_180: false
