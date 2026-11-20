@@ -78,6 +78,8 @@ int main(int argc, char * argv[])
 
     auto command = aimer.aim(targets, t, communication.bullet_speed());
 
+    command.shoot = shooter.shoot(command, aimer, targets, ypr);
+
     communication.send(command);
 
     /// debug
