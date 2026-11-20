@@ -13,17 +13,17 @@ pipeline:
       padding_color: [124, 124, 124]
       normalize_scale: 0.00392156862745098
     postprocess:
-      decoder: yolo_v5
+      decoder: yolo_v8
       confidence_threshold: 0.7
       nms_threshold: 0.3
   inference:
-    type: openvino
-    model_path: assets/armor_v5n_fp16.xml
+    type: tensorrt
+    model_path: assets/armor_v8n_fp16.onnx
     mode: sync
     capacity: 16
     worker: 1
-    openvino:
-      device: CPU
+    tensorrt:
+      device_id: 0
 min_confidence: 0.8
 use_traditional: true
 
@@ -70,7 +70,7 @@ can_interface: "can0"
 
 #####-----gimbal参数-----#####
 com_port: "/dev/gimbal"
-baudrate: 921600
+baudrate: 115200
 
 #####-----tracker参数-----#####
 min_detect_count: 5
