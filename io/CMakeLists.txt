@@ -5,12 +5,13 @@ find_package(yaml-cpp REQUIRED)
 add_subdirectory(serial)
 
 # 创建目标 io
-add_library(io STATIC 
-    hikrobot/hikrobot.cpp    
-    mindvision/mindvision.cpp  
-    usbcamera/usbcamera.cpp  
+add_library(io STATIC
+    hikrobot/hikrobot.cpp
+    mindvision/mindvision.cpp
+    usbcamera/usbcamera.cpp
     camera.cpp
-    cboard.cpp
+    communication.cpp
+    cboard/cboard.cpp
     dm_imu/dm_imu.cpp
     gimbal/gimbal.cpp
 )
@@ -49,7 +50,7 @@ if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT rosidl
     message(WARNING "ROS2 not found, skipping ROS2 specific code.")
 else()
     message(STATUS "ROS2 environment found, compiling ROS2-related code.")
-    
+
     # 添加 ROS2 相关的文件
     target_sources(io PRIVATE ros2/publish2nav.cpp ros2/ros2.cpp ros2/subscribe2nav.cpp)
 

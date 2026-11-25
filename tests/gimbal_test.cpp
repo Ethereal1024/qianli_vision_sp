@@ -1,4 +1,4 @@
-#include "io/gimbal/gimbal.hpp"
+#include "io/communication.hpp"
 
 #include <chrono>
 #include <opencv2/opencv.hpp>
@@ -29,10 +29,10 @@ int main(int argc, char * argv[])
   tools::Exiter exiter;
   tools::Plotter plotter;
 
-  io::Gimbal gimbal(config_path);
+  io::Communication communication(config_path);
 
   auto t0 = std::chrono::steady_clock::now();
-  auto last_mode = gimbal.mode();
+  auto last_mode = communication.mode();
   uint16_t last_bullet_count = 0;
 
   auto fire = false;
@@ -41,16 +41,16 @@ int main(int argc, char * argv[])
   auto first_fired = false;
 
   while (!exiter.exit()) {
-    auto mode = gimbal.mode();
+    auto mode = communication.mode();
 
     if (mode != last_mode) {
-      tools::logger()->info("Gimbal mode changed: {}", gimbal.str(mode));
+      tools::logger()->info("Gimbal mode changed: {}", communication.str(mode));
       last_mode = mode;
     }
 
     auto t = std::chrono::steady_clock::now();
-    auto state = gimbal.state();
-    auto q = gimbal.q(t);
+    auto state = communication.state();
+    auto q = communication.imu_at(t);
     auto ypr = tools::eulers(q, 2, 1, 0);
 
     auto fired = state.bullet_count > last_bullet_count;
@@ -74,7 +74,7 @@ int main(int argc, char * argv[])
     }
     fire_count++;
 
-    gimbal.send(true, test_fire && fire, 1, 0, 0, 0, 0, 0);
+    communication.send(true, test_fire && fire, 1, 0, 0, 0, 0, 0);
 
     nlohmann::json data;
     data["q_yaw"] = ypr[0];
@@ -93,7 +93,7 @@ int main(int argc, char * argv[])
     std::this_thread::sleep_for(9ms);
   }
 
-  gimbal.send(false, false, 0, 0, 0, 0, 0, 0);
+  communication.send(false, false, 0, 0, 0, 0, 0, 0);
 
   return 0;
 }

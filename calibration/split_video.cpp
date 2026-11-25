@@ -41,12 +41,19 @@ int main(int argc, char * argv[])
   auto text_path = fmt::format("{}.txt", input_path);
   cv::VideoCapture video(video_path);
   std::ifstream text(text_path);
+  if (!video.isOpened() || !text.is_open()) {
+    tools::logger()->error("Failed to open input video or metadata: {}", input_path);
+    return 1;
+  }
 
   // 设置视频起始帧
   video.set(cv::CAP_PROP_POS_FRAMES, start_index);
+  std::string line;
   for (int i = 0; i < start_index; i++) {
-    double t, w, x, y, z;
-    text >> t >> w >> x >> y >> z;
+    if (!std::getline(text, line)) {
+      tools::logger()->error("Metadata ended before start frame {}", start_index);
+      return 1;
+    }
   }
   // 获取原始视频的参数
   int frameWidth = video.get(cv::CAP_PROP_FRAME_WIDTH);
@@ -59,8 +66,11 @@ int main(int argc, char * argv[])
   auto outtext_path = fmt::format("{}.txt", output_path);
   cv::VideoWriter outvideo(outvideo_path, fourcc, fps, cv::Size(frameWidth, frameHeight));
   std::ofstream outtext(outtext_path);
+  if (!outvideo.isOpened() || !outtext.is_open()) {
+    tools::logger()->error("Failed to open output video or metadata: {}", output_path);
+    return 1;
+  }
 
-  std::string line;
   cv::Mat img;
 
   // 循环处理视频帧
@@ -70,9 +80,12 @@ int main(int argc, char * argv[])
     video.read(img);
     if (img.empty()) break;
 
-    outvideo.write(img);
+    if (!std::getline(text, line) || line.empty()) {
+      tools::logger()->error("Missing metadata for frame {}", frame_count);
+      return 1;
+    }
 
-    getline(text, line);
+    outvideo.write(img);
     outtext << line << std::endl;
 
     cv::resize(img, img, cv::Size(img.size().width * 0.8, img.size().height * 0.8));

@@ -73,7 +73,7 @@ public:
   GimbalMode mode() const;
   GimbalState state() const;
   std::string str(GimbalMode mode) const;
-  Eigen::Quaterniond q(std::chrono::steady_clock::time_point t);
+  Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point t);
 
   void send(
     bool control, bool fire, float yaw, float yaw_vel, float yaw_acc, float pitch, float pitch_vel,
@@ -92,11 +92,11 @@ private:
   VisionToGimbal tx_data_;
 
   GimbalMode mode_ = GimbalMode::IDLE;
-  GimbalState state_;
+  GimbalState state_{};
   tools::ThreadSafeQueue<std::tuple<Eigen::Quaterniond, std::chrono::steady_clock::time_point>>
     queue_{1000};
 
-  bool read(uint8_t * buffer, size_t size);
+  size_t read(uint8_t * buffer, size_t size);
   void read_thread();
   void reconnect();
 };

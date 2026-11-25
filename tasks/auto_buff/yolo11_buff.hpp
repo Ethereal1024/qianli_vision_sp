@@ -5,12 +5,12 @@
 #include <filesystem>
 #include <opencv2/opencv.hpp>
 
-#include "backend/backend.hpp"
+#include "backend/detector.hpp"
 #include "tools/logger.hpp"
 
 namespace auto_buff
 {
-const std::vector<std::string> class_names = {"buff", "r"};
+const std::vector<std::string> class_names = {"unactivated", "small_activated", "large_activated"};
 
 class YOLO11_BUFF
 {
@@ -32,8 +32,11 @@ public:
   std::vector<Object> get_onecandidatebox(cv::Mat & image);
 
 private:
-  auto_aim::Backend backend_;
+  std::unique_ptr<backend::Detector> detector_;
+  std::uint64_t frame_count_ = 0;
   const int NUM_POINTS = 6;
+
+  std::vector<Object> detect(cv::Mat & image, bool one_candidate);
 
   // 将image保存为"../result/$${programName}.jpg"
   void save(const std::string & programName, const cv::Mat & image);

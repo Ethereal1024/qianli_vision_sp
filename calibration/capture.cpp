@@ -5,10 +5,11 @@
 #include <opencv2/opencv.hpp>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/communication.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ?  |                          | 输出命令行参数说明}"
@@ -25,9 +26,8 @@ void write_q(const std::string q_path, const Eigen::Quaterniond & q)
 }
 
 void capture_loop(
-  const std::string & config_path, const std::string & can, const std::string & output_folder)
+  const std::string & config_path, io::Communication & communication, const std::string & output_folder, const cv::Size& pattern_size)
 {
-  io::CBoard cboard(config_path);
   io::Camera camera(config_path);
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
@@ -35,7 +35,7 @@ void capture_loop(
   int count = 0;
   while (true) {
     camera.read(img, timestamp);
-    Eigen::Quaterniond q = cboard.imu_at(timestamp);
+    Eigen::Quaterniond q = communication.imu_at(timestamp);
 
     // 在图像上显示欧拉角，用来判断imuabs系的xyz正方向，同时判断imu是否存在零漂
     auto img_with_ypr = img.clone();
@@ -44,9 +44,28 @@ void capture_loop(
     tools::draw_text(img_with_ypr, fmt::format("Y {:.2f}", zyx[1]), {40, 80}, {0, 0, 255});
     tools::draw_text(img_with_ypr, fmt::format("X {:.2f}", zyx[2]), {40, 120}, {0, 0, 255});
 
+    // 使用缩小分辨率的灰度图进行棋盘格检测，加速“未识别到棋盘格”时的处理
+    const double scale = 0.5;
+    cv::Mat gray, gray_small;
+    cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+    cv::resize(gray, gray_small, {}, scale, scale);
+
     std::vector<cv::Point2f> centers_2d;
-    auto success = cv::findCirclesGrid(img, cv::Size(10, 7), centers_2d);  // 默认是对称圆点图案
-    cv::drawChessboardCorners(img_with_ypr, cv::Size(10, 7), centers_2d, success);  // 显示识别结果
+    std::vector<cv::Point2f> centers_2d_small;
+    auto success = cv::findChessboardCorners(
+      gray_small, pattern_size, centers_2d_small,
+      cv::CALIB_CB_ADAPTIVE_THRESH + cv::CALIB_CB_NORMALIZE_IMAGE +
+        cv::CALIB_CB_FAST_CHECK);  // 棋盘格角点
+    if (success) {
+      centers_2d.reserve(centers_2d_small.size());
+      for (const auto & p : centers_2d_small) {
+        centers_2d.emplace_back(p.x / scale, p.y / scale);
+      }
+      cv::cornerSubPix(
+        gray, centers_2d, cv::Size(11, 11), cv::Size(-1, -1),
+        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1));
+    }
+    cv::drawChessboardCorners(img_with_ypr, pattern_size, centers_2d, success);  // 显示识别结果
     cv::resize(img_with_ypr, img_with_ypr, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
 
     // 按“s”保存图片和对应四元数，按“q”退出程序
@@ -83,11 +102,19 @@ int main(int argc, char * argv[])
   // 新建输出文件夹
   std::filesystem::create_directory(output_folder);
 
-  tools::logger()->info("默认标定板尺寸为10列7行");
+  tools::logger()->info("[capture]默认标定板尺寸为10列7行");
   // 主循环，保存图片和对应四元数
-  capture_loop(config_path, "can0", output_folder);
 
-  tools::logger()->warn("注意四元数输出顺序为wxyz");
+  // 按配置原地构造通信对象
+  auto config = tools::load(config_path);
+  io::Communication communication(config_path);
+
+  auto pattern_cols = tools::read(config, "pattern_cols", 11); // 行数
+  auto pattern_rows = tools::read(config, "pattern_rows", 8);  // 列数
+  auto pattern_size = cv::Size(pattern_rows, pattern_cols);
+
+  capture_loop(config_path, communication, output_folder, pattern_size);
+  tools::logger()->warn("[capture]注意四元数输出顺序为wxyz");
 
   return 0;
 }

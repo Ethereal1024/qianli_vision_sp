@@ -5,7 +5,7 @@
 #include <chrono>
 #include <list>
 
-#include "io/cboard.hpp"
+#include "io/communication.hpp"
 #include "io/command.hpp"
 #include "target.hpp"
 

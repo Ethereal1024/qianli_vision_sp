@@ -39,6 +39,12 @@ enum ArmorName
 const std::vector<std::string> ARMOR_NAMES = {"one",    "two",     "three", "four",     "five",
                                               "sentry", "outpost", "base",  "not_armor"};
 
+inline ArmorName armor_name_from_model(int id)
+{
+  const ArmorName names[] = {sentry, one, two, three, four, five, outpost, base, base};
+  return id >= 0 && id < 9 ? names[id] : not_armor;
+}
+
 enum ArmorPriority
 {
   first = 1,

@@ -1,13 +1,13 @@
 #include <fmt/core.h>
-#include <yaml-cpp/yaml.h>
 
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
-#include <fstream>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/opencv.hpp>
 
+#include "calibration/common.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
@@ -25,28 +25,21 @@ std::vector<cv::Point3f> centers_3d(const cv::Size & pattern_size, const float c
   return centers_3d;
 }
 
-Eigen::Quaterniond read_q(const std::string & q_path)
-{
-  std::ifstream q_file(q_path);
-  double w, x, y, z;
-  q_file >> w >> x >> y >> z;
-  return {w, x, y, z};
-}
-
 void load(
   const std::string & input_folder, const std::string & config_path,
   std::vector<double> & R_gimbal2imubody_data, std::vector<cv::Mat> & R_gimbal2world_list,
   std::vector<cv::Mat> & t_gimbal2world_list, std::vector<cv::Mat> & rvecs,
-  std::vector<cv::Mat> & tvecs)
+  std::vector<cv::Mat> & tvecs, bool & q_inverted)
 {
   // 读取yaml参数
-  auto yaml = YAML::LoadFile(config_path);
-  auto pattern_cols = yaml["pattern_cols"].as<int>();
-  auto pattern_rows = yaml["pattern_rows"].as<int>();
-  auto center_distance_mm = yaml["center_distance_mm"].as<double>();
-  R_gimbal2imubody_data = yaml["R_gimbal2imubody"].as<std::vector<double>>();
-  auto camera_matrix_data = yaml["camera_matrix"].as<std::vector<double>>();
-  auto distort_coeffs_data = yaml["distort_coeffs"].as<std::vector<double>>();
+  auto yaml = tools::load(config_path);
+  auto pattern_cols = tools::read(yaml, "pattern_cols", 11);
+  auto pattern_rows = tools::read(yaml, "pattern_rows", 8);
+  auto center_distance_mm = tools::read(yaml, "center_distance_mm", 15.0);
+  R_gimbal2imubody_data = tools::read<std::vector<double>>(yaml, "R_gimbal2imubody");
+  auto camera_matrix_data = tools::read<std::vector<double>>(yaml, "camera_matrix");
+  auto distort_coeffs_data = tools::read<std::vector<double>>(yaml, "distort_coeffs");
+  q_inverted = tools::read(yaml, "q_inverted", false);
 
   cv::Size pattern_size(pattern_cols, pattern_rows);
   Eigen::Matrix<double, 3, 3, Eigen::RowMajor> R_gimbal2imubody(R_gimbal2imubody_data.data());
@@ -58,11 +51,18 @@ void load(
     auto img_path = fmt::format("{}/{}.jpg", input_folder, i);
     auto q_path = fmt::format("{}/{}.txt", input_folder, i);
     auto img = cv::imread(img_path);
-    Eigen::Quaterniond q = read_q(q_path);
     if (img.empty()) break;
+    auto q = calibration::read_q(q_path);
+    if (!q) {
+      tools::logger()->warn("Skipping invalid quaternion: {}", q_path);
+      continue;
+    }
 
     // 计算云台的欧拉角
-    Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
+    Eigen::Matrix3d R_imubody2imuabs = q->toRotationMatrix();
+    if (q_inverted) {
+      R_imubody2imuabs.transposeInPlace();
+    }
     Eigen::Matrix3d R_gimbal2world =
       R_gimbal2imubody.transpose() * R_imubody2imuabs * R_gimbal2imubody;
     Eigen::Vector3d ypr = tools::eulers(R_gimbal2world, 2, 1, 0) * 57.3;  // degree
@@ -73,9 +73,18 @@ void load(
     tools::draw_text(drawing, fmt::format("pitch {:.2f}", ypr[1]), {40, 80}, {0, 0, 255});
     tools::draw_text(drawing, fmt::format("roll  {:.2f}", ypr[2]), {40, 120}, {0, 0, 255});
 
-    // 识别标定板
+    // 识别标定板（棋盘格角点）
     std::vector<cv::Point2f> centers_2d;
-    auto success = cv::findCirclesGrid(img, pattern_size, centers_2d);  // 默认是对称圆点图案
+    auto success = cv::findChessboardCorners(
+      img, pattern_size, centers_2d,
+      cv::CALIB_CB_ADAPTIVE_THRESH + cv::CALIB_CB_NORMALIZE_IMAGE);
+    if (success) {
+      cv::Mat gray;
+      cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+      cv::cornerSubPix(
+        gray, centers_2d, cv::Size(11, 11), cv::Size(-1, -1),
+        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1));
+    }
 
     // 显示识别结果
     cv::drawChessboardCorners(drawing, pattern_size, centers_2d, success);
@@ -93,8 +102,13 @@ void load(
     cv::eigen2cv(R_gimbal2world, R_gimbal2world_cv);
     cv::Mat rvec, tvec;
     auto centers_3d_ = centers_3d(pattern_size, center_distance_mm);
-    cv::solvePnP(
-      centers_3d_, centers_2d, camera_matrix, distort_coeffs, rvec, tvec, false, cv::SOLVEPNP_IPPE);
+    if (!cv::solvePnP(
+          centers_3d_, centers_2d, camera_matrix, distort_coeffs, rvec, tvec, false,
+          cv::SOLVEPNP_IPPE) ||
+        !cv::checkRange(rvec) || !cv::checkRange(tvec)) {
+      tools::logger()->warn("Skipping failed pose estimate: {}", img_path);
+      continue;
+    }
 
     // 记录所需的数据
     R_gimbal2world_list.emplace_back(R_gimbal2world_cv);
@@ -106,7 +120,7 @@ void load(
 
 void print_yaml(
   const std::vector<double> & R_gimbal2imubody_data, const cv::Mat & R_camera2gimbal,
-  const cv::Mat & t_camera2gimbal, const Eigen::Vector3d & ypr)
+  const cv::Mat & t_camera2gimbal, const Eigen::Vector3d & ypr, bool q_inverted)
 {
   YAML::Emitter result;
   std::vector<double> R_camera2gimbal_data(
@@ -115,6 +129,7 @@ void print_yaml(
     t_camera2gimbal.begin<double>(), t_camera2gimbal.end<double>());
 
   result << YAML::BeginMap;
+  result << YAML::Key << "q_inverted" << YAML::Value << q_inverted;
   result << YAML::Key << "R_gimbal2imubody";
   result << YAML::Value << YAML::Flow << R_gimbal2imubody_data;
   result << YAML::Newline;
@@ -146,14 +161,26 @@ int main(int argc, char * argv[])
   std::vector<double> R_gimbal2imubody_data;
   std::vector<cv::Mat> R_gimbal2world_list, t_gimbal2world_list;
   std::vector<cv::Mat> rvecs, tvecs;
+  bool q_inverted = false;
   load(
     input_folder, config_path, R_gimbal2imubody_data, R_gimbal2world_list, t_gimbal2world_list,
-    rvecs, tvecs);
+    rvecs, tvecs, q_inverted);
+
+  if (!calibration::has_observable_rotations(R_gimbal2world_list)) {
+    tools::logger()->error(
+      "[calibration_handeye] 手眼标定至少需要在坐标轴上有三个有效的位姿！");
+    return 1;
+  }
 
   // 手眼标定
   cv::Mat R_camera2gimbal, t_camera2gimbal;
   cv::calibrateHandEye(
-    R_gimbal2world_list, t_gimbal2world_list, rvecs, tvecs, R_camera2gimbal, t_camera2gimbal);
+    R_gimbal2world_list, t_gimbal2world_list, rvecs, tvecs, R_camera2gimbal, t_camera2gimbal,
+    cv::CALIB_HAND_EYE_PARK);  // 支持窄视场下的小幅双轴转动
+  if (!cv::checkRange(R_camera2gimbal) || !cv::checkRange(t_camera2gimbal)) {
+    tools::logger()->error("[calibration_handeye] 手眼标定失败！");
+    return 1;
+  }
   t_camera2gimbal /= 1e3;  // mm to m
 
   // 计算相机同理想情况的偏角
@@ -164,5 +191,5 @@ int main(int argc, char * argv[])
   Eigen::Vector3d ypr = tools::eulers(R_camera2ideal, 1, 0, 2) * 57.3;  // degree
 
   // 输出yaml
-  print_yaml(R_gimbal2imubody_data, R_camera2gimbal, t_camera2gimbal, ypr);
+  print_yaml(R_gimbal2imubody_data, R_camera2gimbal, t_camera2gimbal, ypr, q_inverted);
 }

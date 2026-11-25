@@ -1,6 +1,6 @@
 #include <fmt/format.h>
 
-#include "io/gimbal/gimbal.hpp"
+#include "io/communication.hpp"
 #include "tools/exiter.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
@@ -30,7 +30,7 @@ int main(int argc, char * argv[])
   tools::Exiter exiter;
 
   // 初始化云台
-  io::Gimbal gimbal(config_path);
+  io::Communication communication(config_path);
   io::VisionToGimbal plan;
   auto last_t = std::chrono::steady_clock::now();
   plan.yaw = 0;
@@ -42,7 +42,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     auto now = std::chrono::steady_clock::now();
-    auto gs = gimbal.state();
+    auto gs = communication.state();
     if(tools::delta_time(now, last_t) > 1.600) {
         plan.mode = 2;
         tools::logger()->debug("fire!");
@@ -50,7 +50,7 @@ int main(int argc, char * argv[])
     } else plan.mode = 1;
 
 
-    gimbal.send(plan);
+    communication.send(plan);
 
     // -------------- 调试输出 --------------
 

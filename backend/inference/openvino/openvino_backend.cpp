@@ -1,0 +1,268 @@
+#include "openvino_backend.hpp"
+#include "tools/logger.hpp"
+
+#include <cstring>
+#include <exception>
+#include <utility>
+#include <type_traits>
+
+namespace backend::inference
+{
+
+OpenVINO::OpenVINO(const setting::InferenceConfig& config)
+: OpenVINO()
+{
+    if (config.worker == 0)
+    {
+        tools::logger()->error("[openvino] 至少需要一个worker");
+        return;
+    }
+
+    if (config.capacity <= 0)
+    {
+        tools::logger()->error("[openvino] 任务队列容量必须大于0，当前为{}", config.capacity);
+        return;
+    }
+
+    capacity_ = static_cast<size_t>(config.capacity);
+
+    // ov::接口以异常报告失败，记录具体原因并保留未就绪状态。
+    try
+    {
+        if (!initialize(config)) return;
+    }
+    catch (const std::exception& e)
+    {
+        tools::logger()->error("[openvino] 初始化失败: model={}，device={}，{}",
+                              config.model_path, config.openvino.device, e.what());
+        return;
+    }
+
+    ready_ = true;
+    tools::logger()->info("[openvino] 后端就绪: device={}，输入{}个元素，输出{}个元素",
+                         config.openvino.device, in_elements_, out_elements_);
+}
+
+bool OpenVINO::initialize(const setting::InferenceConfig& config)
+{
+    // 只接收已预处理的张量，不在后端隐式执行resize、归一化或布局转换。
+    auto model = core_.read_model(config.model_path);
+
+    if (model->inputs().size() != 1 || model->outputs().size() != 1)
+    {
+        tools::logger()->error("[openvino] 当前仅支持单输入单输出的模型: {}", config.model_path);
+        return false;
+    }
+
+    if (model->input().get_partial_shape().is_dynamic() ||
+        model->output().get_partial_shape().is_dynamic())
+    {
+        tools::logger()->error("[openvino] 当前仅支持静态形状的模型: {}", config.model_path);
+        return false;
+    }
+
+    if (model->input().get_element_type() != ov::element::f32 ||
+        model->output().get_element_type() != ov::element::f32)
+    {
+        tools::logger()->error("[openvino] 当前执行路径仅支持FP32输入输出: {}", config.model_path);
+        return false;
+    }
+
+    const auto input_shape = model->input().get_shape();
+    if (input_shape.size() != 4 || input_shape[0] != 1 || input_shape[1] != 3)
+    {
+        tools::logger()->error("[openvino] 模型输入必须为[1, 3, H, W]: {}", config.model_path);
+        return false;
+    }
+
+    input_size_ = cv::Size(static_cast<int>(input_shape[3]), static_cast<int>(input_shape[2]));
+    compiled_model_ = core_.compile_model(model, config.openvino.device);
+    in_elements_ = ov::shape_size(compiled_model_.input().get_shape());
+    out_elements_ = ov::shape_size(compiled_model_.output().get_shape());
+
+    if (in_elements_ == 0 || out_elements_ == 0)
+    {
+        tools::logger()->error("[openvino] 模型输入输出不能为空: {}", config.model_path);
+        return false;
+    }
+
+    // 先创建全部request，再启动线程，避免worker访问尚未构造的执行资源。
+    requests_.reserve(config.worker);
+    for (size_t i = 0; i < config.worker; ++i)
+    {
+        requests_.push_back(compiled_model_.create_infer_request());
+    }
+
+    threads_.reserve(config.worker);
+    for (size_t i = 0; i < config.worker; ++i)
+    {
+        threads_.emplace_back([this, i] { workerLoop(i); });
+    }
+
+    return true;
+}
+
+OpenVINO::~OpenVINO()
+{
+    // 排空已入队任务后再销毁request，调用方持有的future仍可获取结果。
+    shutdown();
+}
+
+std::future<std::vector<float>> OpenVINO::submitBorrowed(const Input& input)
+{
+    // 只复制矩阵头，CPU数据由调用方保证有效；CUDA数据下载后由任务持有。
+    Input borrowed = input;
+    return submitOwned(std::move(borrowed));
+}
+
+std::future<std::vector<float>> OpenVINO::submitOwned(Input&& input)
+{
+    if (!ready_)
+    {
+        tools::logger()->error("[openvino] 推理后端未就绪，跳过本次任务");
+        return emptyInferenceFuture();
+    }
+
+    auto host_input = std::visit([this](auto& tensor) -> cv::Mat
+    {
+        if constexpr (std::is_same_v<std::decay_t<decltype(tensor)>, cv::Mat>)
+        {
+            if (!checkInput(tensor.type(), tensor.isContinuous(), tensor.total())) return {};
+            return std::move(tensor);
+        }
+        else
+        {
+            auto host_input = downloadInput(tensor);
+            tensor.release();
+            return host_input;
+        }
+    }, input);
+    if (host_input.empty()) return emptyInferenceFuture();
+
+    return enqueue(std::move(host_input));
+}
+
+bool OpenVINO::checkInput(int type, bool continuous, size_t elements) const
+{
+    if (type == CV_32FC1 && continuous && elements == in_elements_) return true;
+
+    tools::logger()->error("[openvino] 输入应为连续FP32 NCHW数据，期望{}个元素，实际{}个，type={}，continuous={}",
+                          in_elements_, elements, type, continuous);
+
+    return false;
+}
+
+cv::Mat OpenVINO::downloadInput(const cv::cuda::GpuMat& input) const
+{
+    if (!checkInput(input.type(), input.isContinuous(),
+                    static_cast<size_t>(input.rows) * static_cast<size_t>(input.cols)))
+        return {};
+
+    cv::Mat host_input;
+    input.download(host_input);
+
+    return host_input;
+}
+
+std::future<std::vector<float>> OpenVINO::enqueue(cv::Mat input)
+{
+    auto task = std::make_unique<Task>();
+    task->input = std::move(input);
+
+    auto future = task->promise.get_future();
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        not_full_.wait(lock, [this]
+        {
+            return stopping_ || task_queue_.size() < capacity_;
+        });
+
+        if (stopping_)
+        {
+            tools::logger()->error("[openvino] 任务队列已关闭，跳过本次任务");
+            task->promise.set_value({});
+            return future;
+        }
+
+        task_queue_.push_back(std::move(task));
+    }
+
+    not_empty_.notify_one();
+
+    return future;
+}
+
+void OpenVINO::workerLoop(size_t index)
+{
+    auto& request = requests_[index];
+
+    while (true)
+    {
+        std::unique_ptr<Task> task;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            not_empty_.wait(lock, [this]
+            {
+                return stopping_ || !task_queue_.empty();
+            });
+
+            // 关闭后继续兑现队列中的future，不丢弃已接受的任务。
+            if (stopping_ && task_queue_.empty()) return;
+
+            task = std::move(task_queue_.front());
+            task_queue_.pop_front();
+        }
+
+        not_full_.notify_one();
+
+        // ov::推理以异常报告失败，记录具体原因；失败时output保持为空。
+        std::vector<float> output;
+        try
+        {
+            output = executeAndCollect(request, task->input);
+
+            if (output.empty())
+                tools::logger()->error("[openvino] worker {} 推理失败，跳过本次任务", index);
+        }
+        catch (const std::exception& e)
+        {
+            tools::logger()->error("[openvino] worker {} 推理失败，跳过本次任务: {}", index, e.what());
+        }
+
+        task->promise.set_value(std::move(output));
+    }
+}
+
+std::vector<float> OpenVINO::executeAndCollect(ov::InferRequest& request, const cv::Mat& input)
+{
+    // 使用request自有输入缓冲，避免request在任务结束后仍引用调用方的数据。
+    auto input_tensor = request.get_input_tensor();
+    std::memcpy(input_tensor.data<float>(), input.data, in_elements_ * sizeof(float));
+
+    // 异步性由worker队列提供；线程内同步infer，避免再引入callback生命周期管理。
+    request.infer();
+
+    auto output_tensor = request.get_output_tensor();
+    std::vector<float> output(out_elements_);
+    std::memcpy(output.data(), output_tensor.data<const float>(), out_elements_ * sizeof(float));
+
+    return output;
+}
+
+void OpenVINO::shutdown()
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopping_ = true;
+    }
+
+    not_empty_.notify_all();
+    not_full_.notify_all();
+
+    for (auto& thread : threads_)
+    {
+        if (thread.joinable()) thread.join();
+    }
+}
+
+} // namespace backend::inference

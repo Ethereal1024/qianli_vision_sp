@@ -23,8 +23,12 @@ PowerRune::PowerRune(
 {
   /// 找出target
 
+  const auto explicit_target = std::find_if(
+    ts.begin(), ts.end(), [](const auto & blade) { return blade.type == _target; });
+  if (explicit_target != ts.end()) std::iter_swap(ts.begin(), explicit_target);
+
   // 只有一个fanblade，就为target
-  if (light_num == 1) ts[0].type = _target;
+  else if (light_num == 1) ts[0].type = _target;
   // 没有新亮起来的fanblade
   else if (last_powerrune.has_value() && ts.size() == last_powerrune.value().light_num) {
     auto last_target_center = last_powerrune.value().fanblades[0].center;

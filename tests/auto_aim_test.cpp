@@ -20,7 +20,8 @@ const std::string keys =
   "{config-path c  | configs/demo.yaml | yaml配置文件的路径}"
   "{start-index s  | 0                 | 视频起始帧下标    }"
   "{end-index e    | 0                 | 视频结束帧下标    }"
-  "{@input-path    | assets/demo/demo  | avi和txt文件的路径}";
+  "{@input-path    | assets/demo/demo  | avi和txt文件的路径}"
+  "{no-display     | false             | 关闭图像显示与按键等待}";
 
 int main(int argc, char * argv[])
 {
@@ -34,6 +35,7 @@ int main(int argc, char * argv[])
   auto config_path = cli.get<std::string>("config-path");
   auto start_index = cli.get<int>("start-index");
   auto end_index = cli.get<int>("end-index");
+  const auto display = !cli.get<bool>("no-display");
 
   tools::Plotter plotter;
   tools::Exiter exiter;
@@ -42,34 +44,52 @@ int main(int argc, char * argv[])
   auto text_path = fmt::format("{}.txt", input_path);
   cv::VideoCapture video(video_path);
   std::ifstream text(text_path);
+  if (!video.isOpened()) {
+    tools::logger()->error("Cannot open replay video: {}", video_path);
+    return 1;
+  }
+  if (!text.is_open()) {
+    tools::logger()->error("Cannot open replay timestamps/quaternions: {}", text_path);
+    return 1;
+  }
 
-  auto_aim::YOLO yolo(config_path);
+  auto_aim::YOLO yolo(config_path, display);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
 
-  cv::Mat img, drawing;
+  cv::Mat img;
   auto t0 = std::chrono::steady_clock::now();
 
   auto_aim::Target last_target;
-  io::Command last_command;
+  io::Command last_command{};
   double last_t = -1;
 
   video.set(cv::CAP_PROP_POS_FRAMES, start_index);
   for (int i = 0; i < start_index; i++) {
     double t, w, x, y, z;
-    text >> t >> w >> x >> y >> z;
+    if (!(text >> t >> w >> x >> y >> z)) {
+      tools::logger()->error("Invalid replay metadata at frame {}: {}", i, text_path);
+      return 1;
+    }
   }
 
   for (int frame_count = start_index; !exiter.exit(); frame_count++) {
     if (end_index > 0 && frame_count > end_index) break;
 
+    const auto capture_start = std::chrono::steady_clock::now();
     video.read(img);
+    const auto capture_ms =
+      tools::delta_time(std::chrono::steady_clock::now(), capture_start) * 1e3;
     if (img.empty()) break;
+    const auto capture_fps = capture_ms > 0 ? 1e3 / capture_ms : 0;
 
     double t, w, x, y, z;
-    text >> t >> w >> x >> y >> z;
-    auto timestamp = t0 + std::chrono::microseconds(int(t * 1e6));
+    if (!(text >> t >> w >> x >> y >> z)) {
+      tools::logger()->error("Invalid replay metadata at frame {}: {}", frame_count, text_path);
+      return 1;
+    }
+    auto timestamp = t0 + std::chrono::microseconds(static_cast<long long>(t * 1e6));
 
     /// 自瞄核心逻辑
 
@@ -94,7 +114,8 @@ int main(int argc, char * argv[])
 
     auto finish = std::chrono::steady_clock::now();
     tools::logger()->info(
-      "[{}] yolo: {:.1f}ms, tracker: {:.1f}ms, aimer: {:.1f}ms", frame_count,
+      "[{}] capture: {:.2f}ms ({:.1f} FPS), yolo: {:.1f}ms, tracker: {:.1f}ms, aimer: {:.1f}ms",
+      frame_count, capture_ms, capture_fps,
       tools::delta_time(tracker_start, yolo_start) * 1e3,
       tools::delta_time(aimer_start, tracker_start) * 1e3,
       tools::delta_time(finish, aimer_start) * 1e3);
@@ -113,7 +134,15 @@ int main(int argc, char * argv[])
         "gimbal yaw{:.2f}", (tools::eulers(gimbal_q.toRotationMatrix(), 2, 1, 0) * 57.3)[0]),
       {10, 90}, {255, 255, 255});
 
+    tools::draw_text(
+      img, fmt::format("Capture: {:.2f} ms ({:.1f} FPS), YOLO: {:.2f} ms", capture_ms,
+                       capture_fps, tools::delta_time(tracker_start, yolo_start) * 1e3),
+      {10, 120}, {0, 255, 255});
+
     nlohmann::json data;
+    data["capture_ms"] = capture_ms;
+    data["capture_fps"] = capture_fps;
+    data["yolo_ms"] = tools::delta_time(tracker_start, yolo_start) * 1e3;
 
     // 装甲板原始观测数据
     data["armor_num"] = armors.size();
@@ -186,12 +215,12 @@ int main(int argc, char * argv[])
       data["recent_nis_failures"] = target.ekf().data.at("recent_nis_failures");
     }
 
-    plotter.plot(data);
-
-    cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
-    cv::imshow("reprojection", img);
-    auto key = cv::waitKey(30);
-    if (key == 'q') break;
+    if (display) {
+      plotter.plot(data);
+      cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
+      cv::imshow("reprojection", img);
+      if (cv::waitKey(30) == 'q') break;
+    }
   }
 
   return 0;

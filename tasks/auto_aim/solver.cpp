@@ -2,10 +2,12 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
 #include <vector>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/yaml.hpp"
 
 namespace auto_aim
 {
@@ -27,6 +29,7 @@ const std::vector<cv::Point3f> SMALL_ARMOR_POINTS{
 Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3d::Identity())
 {
   auto yaml = YAML::LoadFile(config_path);
+  q_inverted_ = tools::read(yaml, "q_inverted", false);
 
   auto R_gimbal2imubody_data = yaml["R_gimbal2imubody"].as<std::vector<double>>();
   auto R_camera2gimbal_data = yaml["R_camera2gimbal"].as<std::vector<double>>();
@@ -48,29 +51,60 @@ Eigen::Matrix3d Solver::R_gimbal2world() const { return R_gimbal2world_; }
 void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
 {
   Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
+  if (q_inverted_) R_imubody2imuabs.transposeInPlace();
   R_gimbal2world_ = R_gimbal2imubody_.transpose() * R_imubody2imuabs * R_gimbal2imubody_;
 }
 
 //solvePnP（获得姿态）
 void Solver::solve(Armor & armor) const
 {
+  solve_impl(armor, false);
+}
+
+bool Solver::try_solve(Armor & armor) const
+{
+  try {
+    return solve_impl(armor, true);
+  } catch (const cv::Exception &) {
+    return false;
+  }
+}
+
+bool Solver::solve_impl(Armor & armor, bool check_pose) const
+{
   const auto & object_points =
     (armor.type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
 
+  if (check_pose) {
+    if (armor.points.size() != object_points.size()) return false;
+    for (const auto & point : armor.points) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y)) return false;
+    }
+  }
+
   cv::Vec3d rvec, tvec;
-  cv::solvePnP(
+  const bool solved = cv::solvePnP(
     object_points, armor.points, camera_matrix_, distort_coeffs_, rvec, tvec, false,
     cv::SOLVEPNP_IPPE);
+  if (check_pose && (!solved || !cv::checkRange(rvec) || !cv::checkRange(tvec))) return false;
+
+  cv::Mat rmat;
+  cv::Rodrigues(rvec, rmat);
+  Eigen::Matrix3d R_armor2camera;
+  cv::cv2eigen(rmat, R_armor2camera);
+  if (check_pose) {
+    for (const auto & point : object_points) {
+      const auto depth = R_armor2camera.row(2).dot(Eigen::Vector3d{point.x, point.y, point.z}) +
+                         tvec[2];
+      if (!std::isfinite(depth) || depth <= 0.0) return false;
+    }
+  }
 
   Eigen::Vector3d xyz_in_camera;
   cv::cv2eigen(tvec, xyz_in_camera);
   armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
   armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
 
-  cv::Mat rmat;
-  cv::Rodrigues(rvec, rmat);
-  Eigen::Matrix3d R_armor2camera;
-  cv::cv2eigen(rmat, R_armor2camera);
   Eigen::Matrix3d R_armor2gimbal = R_camera2gimbal_ * R_armor2camera;
   Eigen::Matrix3d R_armor2world = R_gimbal2world_ * R_armor2gimbal;
   armor.ypr_in_gimbal = tools::eulers(R_armor2gimbal, 2, 1, 0);
@@ -82,9 +116,8 @@ void Solver::solve(Armor & armor) const
   auto is_balance = (armor.type == ArmorType::big) &&
                     (armor.name == ArmorName::three || armor.name == ArmorName::four ||
                      armor.name == ArmorName::five);
-  if (is_balance) return;
-
-  optimize_yaw(armor);
+  if (!is_balance) optimize_yaw(armor);
+  return true;
 }
 
 std::vector<cv::Point2f> Solver::reproject_armor(
