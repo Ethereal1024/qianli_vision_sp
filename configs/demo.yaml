@@ -7,7 +7,7 @@ enemy_color: "blue"
 pipeline:
   processing:
     preprocess:
-      implementation: cpu
+      implementation: cuda
       center_padding: true
       padding_color: [124, 124, 124]
       normalize_scale: 0.00392156862745098
